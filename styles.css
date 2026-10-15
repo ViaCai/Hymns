@@ -1,0 +1,572 @@
+/* ===== Hymns 插件样式 v2 ===== */
+.hymns-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  font-size: var(--font-ui-small);
+}
+
+/* 列表容器 / 查看容器 都占满剩余空间并可滚动 */
+.hymns-listwrap,
+.hymns-viewerwrap {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.hymns-header {
+  padding:10px 10px 6px 10px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+.hymns-title {
+  font-weight: 600;
+  font-size: var(--font-ui-medium);
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.hymns-title .hymns-count { font-weight: 400; color: var(--text-muted); font-size: var(--font-ui-smaller); }
+
+.hymns-search {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-modifier-form-field);
+  color: var(--text-normal);
+  font-size: var(--font-ui-small);
+}
+.hymns-search:focus { outline: 2px solid var(--interactive-accent); outline-offset: -1px; }
+
+/* 底部工具条：搜索框 + 随机按钮 在列表下方；分类与翻页再下一行 */
+.hymns-footbar {
+  flex: 0 0 auto;
+  padding: 8px 10px;
+  border-top: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.hymns-foot-search { display: flex; align-items: center; gap: 6px; }
+.hymns-foot-search .hymns-search { flex: 1 1 auto; }
+/* 随机按钮：仅显示符号，置于搜索框前面，强调为强调色 */
+button.hymns-icon-btn.hymns-random-btn { color: var(--interactive-accent) !important; }
+button.hymns-icon-btn.hymns-random-btn:hover { color: var(--interactive-accent-hover, var(--interactive-accent)) !important; }
+.hymns-foot-nav { display: flex; align-items: center; gap: 8px; }
+/* 分类按钮：方形候选框，占据左侧空间；翻页栏紧随其右侧 */
+.hymns-foot-nav .hymns-cat-btn { flex: 1 1 auto; min-width: 0; white-space: nowrap; }
+.hymns-foot-nav .hymns-pager { flex: 0 0 auto; }
+
+/* 翻页栏在底部工具条内：取消旧的 sticky/边框样式，改为内联（上一页 | 页码 | 下一页） */
+.hymns-foot-nav .hymns-pager {
+  margin: 0; padding: 0; border-top: none;
+  position: static; background: transparent;
+  flex-wrap: nowrap;
+}
+/* 页码按钮：只显示当前页码（0/1/2… 或 S），固定最小宽度避免数字与 S 之间宽度跳动 */
+.hymns-page-num { min-width: 34px; padding: 4px 10px; font-weight: 600; text-align: center; }
+.hymns-page-num .hymns-page-cur { font-size: var(--font-ui-medium); }
+
+/* 下拉弹层：锚定到按钮（默认在按钮上方展开），不再跟随鼠标点击位置 */
+.hymns-dropdown {
+  position: fixed;
+  z-index: var(--layer-popover, 300);
+  min-width: 130px;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--background-primary);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .25);
+}
+.hymns-dropdown-item {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 10px;
+  border-radius: var(--radius-s);
+  cursor: pointer;
+  white-space: nowrap;
+  color: var(--text-normal);
+}
+.hymns-dropdown-item:hover { background: var(--background-modifier-hover); }
+.hymns-dropdown-item.is-active { color: var(--interactive-accent); font-weight: 600; }
+.hymns-dropdown-dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; }
+.hymns-dropdown-label { flex: 1 1 auto; }
+.hymns-dd-check { color: var(--interactive-accent); }
+/* 菜单项前置选择框（如「联动」的两个方向）：选中只在方框里打勾，无颜色/加粗变化 */
+.hymns-dd-box {
+  flex: 0 0 auto;
+  width: 14px; height: 14px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 3px;
+  font-size: 11px; line-height: 1;
+  color: var(--text-normal);
+  background: var(--background-primary);
+}
+.hymns-dd-box.is-checked { border-color: var(--text-faint); }
+
+/* 页码下拉：只显示数字（网格），当前页红色高亮 */
+.hymns-dropdown-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(34px, 1fr));
+  gap: 4px;
+  width: max-content;
+}
+.hymns-dd-cell {
+  display: flex; align-items: center; justify-content: center;
+  padding: 6px 0;
+  min-width: 34px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--background-secondary);
+  cursor: pointer;
+  color: var(--text-normal);
+  font-variant-numeric: tabular-nums;
+}
+.hymns-dd-cell:hover { background: var(--background-modifier-hover); }
+.hymns-dd-cell.is-active {
+  color: #e53935;
+  border-color: #e53935;
+  font-weight: 700;
+  background: var(--background-modifier-active);
+}
+
+.hymns-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.hymns-chip {
+  cursor: pointer;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-size: var(--font-ui-smaller);
+  user-select: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.hymns-chip.is-active { background: var(--interactive-accent); color: var(--text-on-accent); border-color: var(--interactive-accent); }
+.hymns-chip .hymns-chip-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+
+/* 分类：单个按钮（显示当前分类名） */
+.hymns-catwrap { margin-top: 8px; }
+.hymns-cat-btn {
+  cursor: pointer; appearance: none; -webkit-appearance: none;
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--interactive-accent);
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  border-radius: var(--radius-s);
+  padding: 4px 12px;
+  font-size: var(--font-ui-small);
+  font-weight: 600;
+  user-select: none;
+}
+.hymns-cat-btn:hover { background: var(--background-modifier-hover); }
+.hymns-cat-btn::after { content: '▾'; font-size: 10px; opacity: 0.7; margin-left: auto; }
+.hymns-cat-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+
+/* 结果列表（可滚动 = 滑条） */
+/* scrollbar-gutter: stable —— 始终预留滚动条宽度。
+   否则「最近打开」展开后内容超出一屏 → 滚动条出现 → 可用宽度变窄 → 分类卡片被重新排版（大小跳变）。
+   预留槽位后宽度恒定，展开/收起前后卡片尺寸保持一致。 */
+.hymns-results {
+  flex: 1 1 auto; min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  padding: 6px;
+}
+
+.hymns-section-title {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  margin: 10px 4px 4px 4px;
+}
+.hymns-home-actions { display: flex; gap: 6px; margin: 4px; flex-wrap: wrap; }
+.hymns-btn {
+  cursor: pointer;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  border-radius: var(--radius-s);
+  padding: 4px 8px;
+  font-size: var(--font-ui-smaller);
+}
+.hymns-btn:hover { background: var(--background-modifier-hover); }
+
+/* 分类卡片（首页）：点击跳转到相应诗歌列表 */
+.hymns-cat-cards {
+  display: grid;
+  /* minmax 收窄到 80px：即使永久预留了滚动条槽位，仍能保持 3 列，尺寸与展开前一致 */
+  grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+  gap: 8px;
+  padding: 4px;
+  margin-bottom: 6px;
+}
+.hymns-cat-card {
+  cursor: pointer;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  border-radius: var(--radius-s);
+  padding: 10px 8px;
+  display: flex; flex-direction: column; gap: 4px; align-items: flex-start;
+}
+.hymns-cat-card:hover { background: var(--background-modifier-hover); border-color: var(--interactive-accent); }
+.hymns-cat-card-dot { width: 12px; height: 12px; border-radius: 50%; }
+.hymns-cat-card-name { font-weight: 600; font-size: var(--font-ui-small); }
+.hymns-cat-card-count { color: var(--text-muted); font-size: var(--font-ui-smaller); }
+
+/* 可折叠区块（最近打开 / 播放列表，默认折叠） */
+.hymns-collapsible {
+  margin: 6px 2px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  overflow: hidden;
+}
+.hymns-collapsible-head {
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 10px;
+  cursor: pointer;
+  user-select: none;
+  background: var(--background-secondary);
+}
+.hymns-collapsible-head:hover { background: var(--background-modifier-hover); }
+.hymns-collapsible-title { flex: 1 1 auto; font-weight: 600; }
+.hymns-collapsible-caret { color: var(--text-muted); display: inline-flex; transition: transform 120ms ease; }
+.hymns-collapsible-caret svg { width: 16px; height: 16px; }
+.hymns-collapsible-body { padding: 4px 6px; }
+
+.hymns-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius-s);
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.hymns-item:hover { background: var(--background-modifier-hover); }
+.hymns-item.is-selected { background: var(--background-modifier-active); border-color: var(--interactive-accent); }
+
+.hymns-badge {
+  flex: 0 0 auto;
+  width: 26px; height: 26px;
+  border-radius: 6px;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 700; color: #fff; font-size: var(--font-ui-smaller);
+}
+.hymns-info { flex: 1 1 auto; min-width: 0; }
+.hymns-code { font-weight: 600; color: var(--text-normal); }
+/* 列表项首行：编号 + 诗歌名 在同一行（名字写在编号后面） */
+.hymns-head { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.hymns-head .hymns-code { flex: 0 0 auto; }
+.hymns-head .hymns-title-inline {
+  flex: 1 1 auto; min-width: 0;
+  color: var(--text-normal);
+  font-weight: 600; /* 诗歌列表中诗歌标题加粗显示 */
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.hymns-title-text {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 含歌词片段时允许换行显示（最多 3 行） */
+.hymns-info.has-snippet .hymns-title-text {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+/* 高亮：歌词片段、标题、编号统一配色（搜索结果里一切命中位置都要标出来） */
+.hymns-item mark,
+.hymns-title-text mark {
+  background: var(--text-highlight-bg, #ffe58f);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.hymns-actions { flex: 0 0 auto; display: flex; gap: 2px; align-items: center; }
+/* 注意：Obsidian 基础规则 `button:not(.clickable-icon)` 权重为 (0,1,1)，会覆盖本类的透明背景，
+   导致图标按钮变成灰色方块（移动端尤其明显）。故用 `button.hymns-icon-btn` + !important 提升权重。 */
+button.hymns-icon-btn,
+button.hymns-icon-btn.hymns-icon-btn {
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  border: none !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+  color: var(--text-muted) !important;
+  border-radius: var(--radius-s);
+  width: 30px; height: 30px;
+  min-width: 30px; min-height: 30px;
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 0;
+  line-height: 1;
+}
+button.hymns-icon-btn:hover,
+button.hymns-icon-btn.hymns-icon-btn:hover {
+  background: var(--background-modifier-hover) !important;
+  color: var(--text-normal) !important;
+}
+button.hymns-icon-btn svg,
+button.hymns-icon-btn.hymns-icon-btn svg {
+  width: 18px; height: 18px;
+  min-width: 18px; min-height: 18px;
+  opacity: 1;
+  margin: 0;
+  stroke: currentColor;
+  fill: none;
+  flex-shrink: 0;
+}
+
+.hymns-empty, .hymns-note {
+  color: var(--text-muted);
+  padding: 12px 8px;
+  font-size: var(--font-ui-smaller);
+  text-align: center;
+  white-space: pre-line;
+}
+.hymns-loadmore {
+  display: block; width: 100%;
+  margin: 8px 0;
+  padding: 8px;
+  cursor: pointer;
+  border: 1px dashed var(--background-modifier-border);
+  background: var(--background-secondary);
+  color: var(--text-muted);
+  border-radius: var(--radius-s);
+  font-size: var(--font-ui-smaller);
+}
+
+/* 分页栏：直接渲染页码按钮（每页 PAGE_SIZE 首） */
+.hymns-pager {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+  margin: 8px 0 4px; padding: 6px;
+  border-top: 1px solid var(--background-modifier-border);
+  position: sticky; bottom: 0;
+  background: var(--background-primary);
+}
+/* 页码按钮较多时允许换行并内部滚动，避免占用过多空间 */
+.hymns-pager-pages { max-height: 132px; overflow-y: auto; align-content: flex-start; }
+.hymns-pager-pages .hymns-page-btn { min-width: 34px; text-align: center; padding: 4px 8px; }
+.hymns-pager-pages .hymns-page-btn.is-active {
+  background: var(--interactive-accent); color: var(--text-on-accent);
+  border-color: var(--interactive-accent); opacity: 1; cursor: default;
+}
+.hymns-page-btn {
+  cursor: pointer; appearance: none; -webkit-appearance: none;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  border-radius: var(--radius-s);
+  padding: 4px 10px;
+  font-size: var(--font-ui-small);
+}
+.hymns-page-btn:hover { background: var(--background-modifier-hover); }
+.hymns-page-btn.is-disabled,
+.hymns-page-btn:disabled { opacity: 0.4; cursor: default; }
+.hymns-page-info { color: var(--text-muted); font-size: var(--font-ui-smaller); white-space: nowrap; }
+.hymns-page-jump { display: inline-flex; align-items: center; gap: 4px; color: var(--text-muted); font-size: var(--font-ui-smaller); }
+.hymns-page-input {
+  width: 56px; padding: 3px 6px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: var(--font-ui-small);
+}
+
+/* 查看模式（侧边栏内用 pdf.js 渲染到 canvas） */
+.hymns-viewerwrap { padding: 0; }
+.hymns-viewer-toolbar {
+  display: flex; align-items: center; gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+.hymns-viewer-title { flex: 1 1 auto; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hymns-viewer-body {
+  flex: 1 1 auto; min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+  display: flex; flex-direction: column; align-items: stretch;
+  background: var(--background-secondary);
+}
+.hymns-viewer-body canvas {
+  background: #fff;
+  width: 100% !important;
+  height: auto !important;
+  margin-bottom: 8px;
+  border-radius: 4px;
+  box-shadow: 0 1px 4px rgba(0,0,0,.25);
+}
+/* 操作区：一排图标按钮，与诗歌列表按钮同款 */
+.hymns-viewer-actions {
+  display: flex; align-items: center; gap: 4px;
+  padding: 6px 8px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+.hymns-viewer-actions .hymns-icon-btn { width: 30px; height: 30px; }
+
+/* 播放栏（固定） */
+.hymns-player {
+  border-top: 1px solid var(--background-modifier-border);
+  padding: 8px 10px;
+  background: var(--background-secondary);
+  flex: 0 0 auto;
+}
+.hymns-player-row { display: flex; align-items: center; gap: 6px; }
+/* 播放栏第一行：当前播放的歌曲名 */
+.hymns-now {
+  display: block;
+  margin-bottom: 6px;
+  font-size: var(--font-ui-small);
+  font-weight: 600;
+  color: var(--text-normal);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* 「查看当前歌曲的 pdf」图标按钮：与「联动」按钮一起被推到播放栏最右侧 */
+.hymns-pdf-btn { flex: 0 0 auto; margin-left: auto; }
+/* 同一编号下有多个版本时，编号右侧的版本标注 */
+.hymns-variant-tag {
+  flex: 0 0 auto;
+  margin-left: 2px;
+  padding: 0 5px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  white-space: nowrap;
+  line-height: 1.4;
+}
+/* 「联动」图标按钮（Lucide file-audio）：与「查看当前歌曲的pdf」依次靠右排列；
+   任一方向开启时图标用强调色，不做背景块 */
+.hymns-link-btn { flex: 0 0 auto; }
+button.hymns-icon-btn.hymns-link-btn.is-on,
+button.hymns-icon-btn.hymns-link-btn.is-on:hover {
+  color: var(--interactive-accent) !important;
+}
+.hymns-player audio { width: 100%; margin-top: 6px; height: 32px; }
+.hymns-current-pl { background: var(--background-modifier-active); border-radius: var(--radius-s); }
+.hymns-current-pl .hymns-pl-name { font-weight: 600; }
+
+/* 播放列表 */
+.hymns-pl-item { display: flex; align-items: center; gap: 8px; padding: 6px 4px; border-bottom: 1px solid var(--background-modifier-border); }
+.hymns-pl-name { flex: 1 1 auto; min-width: 0; }
+.hymns-pl-count { color: var(--text-muted); font-size: var(--font-ui-smaller); margin-right: 8px; white-space: nowrap; }
+/* 内置默认播放列表标记 */
+.hymns-pl-badge {
+  flex: 0 0 auto; margin-right: 6px; padding: 1px 6px; border-radius: 999px;
+  font-size: var(--font-ui-smaller); line-height: 1.6;
+  color: var(--text-on-accent); background: var(--interactive-accent);
+  white-space: nowrap;
+}
+.hymns-pl-input {
+  width: 100%; padding: 6px 8px; margin-bottom: 8px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-modifier-form-field);
+  color: var(--text-normal);
+}
+.hymns-pl-detail { margin-top: 8px; }
+
+/* 播放列表明细：顶部“返回上一页”栏 */
+.hymns-pl-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.hymns-pl-head h3.hymns-pl-title { margin: 0; font-size: var(--font-ui-medium); }
+/* 每行操作按钮组：播放 / 打开PDF / 更多（图标，与列表页、查看器统一） */
+.hymns-pl-actions { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
+.hymns-pl-item .hymns-pl-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 置灰的图标按钮（如首/末行的上移、下移） */
+button.hymns-icon-btn:disabled { opacity: 0.3; cursor: default; }
+/* 新建播放列表行：输入框 + 「确定」按钮（触屏设备无键盘，不能只靠回车） */
+.hymns-pl-new { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+.hymns-pl-new .hymns-pl-input { flex: 1 1 auto; min-width: 0; margin-bottom: 0; }
+.hymns-pl-new .hymns-btn { flex: 0 0 auto; white-space: nowrap; }
+
+/* 列表名可点击（打开明细，查看/编辑歌曲） */
+.hymns-pl-name-link { cursor: pointer; }
+.hymns-pl-name-link:hover { color: var(--text-accent); text-decoration: underline; }
+
+/* 批量选择工具条：全选 / 已选计数 / 删除所选 */
+.hymns-pl-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; min-height: 28px; }
+.hymns-pl-bar.is-empty .hymns-pl-selall { visibility: hidden; }
+.hymns-pl-selall {
+  display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto;
+  font-size: var(--font-ui-smaller); color: var(--text-muted); cursor: pointer;
+}
+.hymns-pl-selall input { margin: 0; }
+.hymns-pl-selinfo { flex: 1 1 auto; font-size: var(--font-ui-smaller); color: var(--text-muted); }
+button.hymns-icon-btn.hymns-pl-batchdel { color: var(--text-error); }
+button.hymns-icon-btn.hymns-pl-batchdel:hover { color: var(--text-error); background: var(--background-modifier-hover); }
+button.hymns-icon-btn.hymns-pl-batchdel:disabled { color: var(--text-faint); }
+/* 删除（单条）图标用错误色提示 */
+button.hymns-icon-btn.hymns-pl-del { color: var(--text-error); }
+button.hymns-icon-btn.hymns-pl-del:hover { color: var(--text-error); background: var(--background-modifier-hover); }
+/* 复选框列（统一容器宽度，保证各行名字左对齐） */
+.hymns-pl-check { flex: 0 0 auto; display: inline-flex; align-items: center; width: 20px; }
+.hymns-pl-check input { margin: 0; }
+
+/* 复制歌词弹窗 */
+.hymns-lyrics-modal { display: flex; flex-direction: column; gap: 10px; padding: 4px; }
+.hymns-lyrics-head { font-weight: 700; font-size: var(--font-ui-medium); }
+.hymns-lyrics-body {
+  white-space: pre-wrap;           /* 保留换行与缩进，便于阅读 */
+  word-break: break-word;
+  user-select: text;               /* 允许鼠标选取任意文字复制 */
+  -webkit-user-select: text;
+  line-height: 1.7;
+  padding: 10px 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--background-secondary);
+  max-height: 60vh; overflow: auto;
+  font-size: var(--font-ui-medium);
+}
+.hymns-lyrics-bar { display: flex; align-items: center; gap: 10px; }
+.hymns-lyrics-bar .hymns-note { color: var(--text-muted); font-size: var(--font-ui-smaller); }
+
+/* 设置页：文件夹零配置（浏览 / 自动检测 / 实时校验 / 扫描状态） */
+.hymns-scan-status {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  padding: 8px 10px;
+  margin-bottom: 14px;
+  background: var(--background-secondary);
+  font-size: var(--font-ui-small);
+}
+.hymns-scan-status.is-error { border-color: #e53935; }
+.hymns-scan-line { font-weight: 600; }
+.hymns-scan-note { color: var(--text-muted); margin-top: 4px; line-height: 1.5; }
+.hymns-scan-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.hymns-folder-hint {
+  margin: -6px 0 14px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  line-height: 1.5;
+  word-break: break-word;
+}
+.hymns-folder-hint.is-error { color: var(--text-error, #e53935); }
+
+/* 侧边栏：一首都没扫到时的引导卡片 */
+.hymns-empty-guide {
+  border: 1px solid #e53935;
+  border-radius: var(--radius-s);
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  font-size: var(--font-ui-small);
+  line-height: 1.6;
+}
+.hymns-empty-guide-title { font-weight: 700; margin-bottom: 4px; }
+.hymns-empty-guide button { margin-top: 8px; }

@@ -1,0 +1,9 @@
+{
+  "id": "hymns",
+  "name": "Hymns",
+  "version": "1.0.0",
+  "minAppVersion": "0.15.0",
+  "description": "诗歌浏览、搜索、播放与收藏插件：按编号(如 D116)或关键词(空格分隔，如 恩典 耶稣)实时搜索，预览 PDF，播放 MP3，收藏与播放列表。桌面端与移动端通用。",
+  "author": "ViaCai",
+  "isDesktopOnly": false
+}
