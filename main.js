@@ -2257,7 +2257,14 @@ class HymnsPlugin extends Plugin {
         // 0 首必须明说，否则用户只会看到“空列表”而无从下手
         new Notice('Hymns：没有扫描到任何诗歌 PDF。请到设置里把「PDF 文件夹」留空（扫描整个仓库），或用「自动检测」一键定位。', 12000);
       } else if (!Object.keys(this.lyrics).length) {
-        new Notice('未找到歌词索引：可在设置中点击「重建歌词索引」生成（首次约需数分钟）', 8000);
+        // 有诗歌 PDF 但还没建歌词索引 → 首次启动自动建立（带进度提示），无需手动点按钮。
+        // 自动建完后 lyrics.json 已落盘（即便全是图片型 PDF 也会写入 _empty 占位），
+        // 故下次启动 loadLyrics 读到非空即跳过，不会反复慢启动。
+        try {
+          await this.rebuildLyrics(false);
+        } catch (e) {
+          new Notice('自动建立歌词索引失败：' + (e && e.message ? e.message : e) + '。可到设置手动点“重建歌词索引”。', 10000);
+        }
       }
       if (this.view) this.view.renderListMode();
       // 启动后自动检测更新（受 settings.autoCheckUpdate 与 12 小时节流控制）
