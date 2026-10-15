@@ -52,9 +52,9 @@
 }
 .hymns-foot-search { display: flex; align-items: center; gap: 6px; }
 .hymns-foot-search .hymns-search { flex: 1 1 auto; }
-/* 随机按钮：仅显示符号，置于搜索框前面，强调为强调色 */
-button.hymns-icon-btn.hymns-random-btn { color: var(--interactive-accent) !important; }
-button.hymns-icon-btn.hymns-random-btn:hover { color: var(--interactive-accent-hover, var(--interactive-accent)) !important; }
+/* 随机按钮：仅显示符号，置于搜索框前面，强调为强调色（重复类名提升权重以避免强制覆盖）。 */
+button.hymns-icon-btn.hymns-icon-btn.hymns-random-btn { color: var(--interactive-accent); }
+button.hymns-icon-btn.hymns-icon-btn.hymns-random-btn:hover { color: var(--interactive-accent-hover, var(--interactive-accent)); }
 .hymns-foot-nav { display: flex; align-items: center; gap: 8px; }
 /* 分类按钮：方形候选框，占据左侧空间；翻页栏紧随其右侧 */
 .hymns-foot-nav .hymns-cat-btn { flex: 1 1 auto; min-width: 0; white-space: nowrap; }
@@ -298,17 +298,18 @@ button.hymns-icon-btn.hymns-random-btn:hover { color: var(--interactive-accent-h
 
 .hymns-actions { flex: 0 0 auto; display: flex; gap: 2px; align-items: center; }
 /* 注意：Obsidian 基础规则 `button:not(.clickable-icon)` 权重为 (0,1,1)，会覆盖本类的透明背景，
-   导致图标按钮变成灰色方块（移动端尤其明显）。故用 `button.hymns-icon-btn` + !important 提升权重。 */
+   导致图标按钮变成灰色方块（移动端尤其明显）。故用重复类名 `button.hymns-icon-btn.hymns-icon-btn`
+   把权重提到 (0,2,1) 来覆盖它（遵循规范，不使用强制覆盖）。 */
 button.hymns-icon-btn,
 button.hymns-icon-btn.hymns-icon-btn {
   cursor: pointer;
   appearance: none;
   -webkit-appearance: none;
-  border: none !important;
-  background: transparent !important;
-  background-color: transparent !important;
-  box-shadow: none !important;
-  color: var(--text-muted) !important;
+  border: none;
+  background: transparent;
+  background-color: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
   border-radius: var(--radius-s);
   width: 30px; height: 30px;
   min-width: 30px; min-height: 30px;
@@ -318,8 +319,8 @@ button.hymns-icon-btn.hymns-icon-btn {
 }
 button.hymns-icon-btn:hover,
 button.hymns-icon-btn.hymns-icon-btn:hover {
-  background: var(--background-modifier-hover) !important;
-  color: var(--text-normal) !important;
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
 }
 button.hymns-icon-btn svg,
 button.hymns-icon-btn.hymns-icon-btn svg {
@@ -404,10 +405,11 @@ button.hymns-icon-btn.hymns-icon-btn svg {
   display: flex; flex-direction: column; align-items: stretch;
   background: var(--background-secondary);
 }
+/* 画布尺寸/背景已由 JS 以内联样式设定（见 renderViewerPdf），此处仅作兜底并补一层阴影。 */
 .hymns-viewer-body canvas {
   background: #fff;
-  width: 100% !important;
-  height: auto !important;
+  width: 100%;
+  height: auto;
   margin-bottom: 8px;
   border-radius: 4px;
   box-shadow: 0 1px 4px rgba(0,0,0,.25);
@@ -456,7 +458,7 @@ button.hymns-icon-btn.hymns-icon-btn svg {
 .hymns-link-btn { flex: 0 0 auto; }
 button.hymns-icon-btn.hymns-link-btn.is-on,
 button.hymns-icon-btn.hymns-link-btn.is-on:hover {
-  color: var(--interactive-accent) !important;
+  color: var(--interactive-accent);
 }
 .hymns-player audio { width: 100%; margin-top: 6px; height: 32px; }
 .hymns-current-pl { background: var(--background-modifier-active); border-radius: var(--radius-s); }

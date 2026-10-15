@@ -2,6 +2,8 @@
 
 诗歌浏览、搜索、播放与收藏插件：按编号（如 `D116`）或关键词（空格分隔，如 `恩典 耶稣`）实时搜索，预览 PDF，播放 MP3，收藏与播放列表。桌面端与移动端通用。
 
+注意：插件本体只有几KB，本插件还需要去QQ群1128049033中下载诗歌PDF（500MB）和MP3（3.79 GB），下载好请解压到你的obsidian里你自己的仓库任意位置。每次启动时，插件会自动扫描仓库，创建诗歌索引和歌词索引。
+
 ## 功能
 
 - **实时搜索**：按编号或关键词即时过滤，分组展示（大本诗歌 / 补充诗歌 / 儿童诗歌 / 青年诗歌 / 行政区 / 特会诗歌 / 其他）。
@@ -67,9 +69,54 @@ hymns/
 └── README.md
 ```
 
+---
+
+## English
+
+### Hymns — an Obsidian hymnal plugin
+
+Browse, search, play and bookmark hymns: instant search by number (e.g. `D116`) or keywords, PDF preview, MP3 playback, favourites and playlists. Works on desktop and mobile.
+
+### Installation
+
+Manual installation:
+
+1. Download `main.js`, `styles.css` and `manifest.json` from the [latest release](https://github.com/ViaCai/Hymns/releases/latest).
+2. Create the folder `<your-vault>/.obsidian/plugins/hymns/`.
+3. Put the three files into that folder.
+4. Reload Obsidian, then enable **Hymns** in *Settings → Community plugins*.
+
+Via BRAT: add `ViaCai/Hymns` in the BRAT plugin and let it install the latest release.
+
+### Usage
+
+1. Put your hymn PDF/MP3 files anywhere inside your vault. The folder names are configurable in the plugin settings — leave them empty to scan the whole vault.
+2. Hymn numbers are detected from file names, e.g. `D116 <title>.pdf` or `D116-<title>.mp3`.
+3. On every startup the plugin scans the vault and builds the hymn index and the lyrics index automatically.
+4. Open the Hymns view from the ribbon, then search, preview the PDF and play the MP3.
+
+### Settings
+
+- **PDF folder / MP3 folder** — leave empty to scan the whole vault.
+- **Link PDF and MP3** — follow the current hymn in both viewers.
+- **Rebuild index / Rebuild lyrics index** — rebuild after adding or moving files.
+- **Updates** — toggle the automatic update check, check for updates now, view the current changelog and the update history.
+
+### Notes on plugin behavior
+
+- **Vault enumeration** — the plugin lists the files in your vault in order to locate hymn PDF/MP3 files. This is required so that you do not have to configure each file manually.
+- **Clipboard access** — used only when you click on "Copy lyrics".
+- **Dynamic code execution** — the bundled PDF.js library is evaluated with `new Function` inside an isolated sandbox object (`evalPdfLibIsolated`). This keeps the library out of the global scope and allows PDF rendering to work on mobile without a Web Worker.
+
+### License
+
+MIT
+
+---
+
 ## 许可证
 
-MIT License
+MIT License（见 [LICENSE](LICENSE)）
 
 ## ☕ 如果觉得这款插件对您有帮助，也可以支持我的项目
 
