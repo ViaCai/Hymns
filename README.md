@@ -1,23 +1,27 @@
 # Hymns（诗歌）Obsidian 插件
 
-诗歌浏览、搜索、播放与收藏插件：按编号（如 `D116`）或关键词（空格分隔，如 `恩典 耶稣`）实时搜索，预览 PDF，播放 MP3，收藏与播放列表。桌面端与移动端通用。
+诗歌浏览、搜索、播放与收藏插件：按编号（如 `D116`）或关键词（空格分隔，如 `恩典 耶稣`）实时搜索，预览 PDF，播放 MP3，收藏与播放列表。桌面端与移动端通用。仅支持大本诗歌 / 补充诗歌 / 唱诗人 / 新歌颂咏 / 儿童诗歌 / 青年诗歌 / 特会诗歌
 
-注意：插件本体约 1.5 MB（已内置 PDF.js 解析库，**安装只需要 `main.js` / `styles.css` / `manifest.json` 三个文件**，无需额外文件）。诗歌 PDF（约 500 MB）与 MP3（约 3.79 GB）体积较大，请到 QQ 群 1128049033 下载，解压到你 Obsidian 仓库的任意位置。每次启动时，插件会自动扫描仓库并创建诗歌索引和歌词索引。
+注意：插件本体约 1.5 MB，由于诗歌PDF（约 500 MB）与 MP3（约 3.79 GB）体积较大，请到 QQ 群 1128049033 另行下载，解压到你 Obsidian 仓库的任意位置。obsidian启动时，插件会自动扫描仓库中的诗歌PDF与MP3，并自动创建诗歌索引和歌词索引。
+
+<img src="images/Hymns.png" alt="插件展示" width="480" />
 
 ## 功能
 
-- **实时搜索**：按编号或关键词即时过滤，分组展示（大本诗歌 / 补充诗歌 / 儿童诗歌 / 青年诗歌 / 行政区 / 特会诗歌 / 其他）。
-- **PDF 预览**：侧边栏（或主视图）查看诗歌 PDF，支持翻页、缩放、全屏。
+- **实时搜索**：按编号或关键词即时过滤，分组展示（大本诗歌 / 补充诗歌 / 唱诗人 / 新歌颂咏 / 儿童诗歌 / 青年诗歌 / 特会诗歌 / 其他）。
+- **PDF 预览**：单击诗歌在侧边栏查看，双击诗歌在主视图查看。
 - **MP3 播放**：一键播放诗歌音频，支持顺序 / 单曲循环 / 列表循环；可切换音频来源。
-- **收藏与播放列表**：收藏诗歌；内置 7 个主题歌单（倪柝声 / 李常受 / 余洁麟 / 和受恩 / 霍华德 / 以撒·华滋 / 约翰·牛顿），也可自建歌单。删除均二次确认，支持多选 / 全选批量删除与列表排序。
-- **歌词索引**：随插件附带 `lyrics.json`（由“重建歌词索引”生成，不纳入版本库），可在列表与查看器中复制歌词。
+- **收藏与播放列表**：收藏诗歌；内置 7 个主题歌单（倪柝声 / 李常受 / 余洁麟 / 和受恩 / 霍华德 / 以撒·华滋 / 约翰·牛顿），也可自建歌单。
+- **联动**：可在底部播放栏「联动」里勾选 MP3 随 PDF 切换以及 PDF 随 MP3 切换。
+- **复制链接或嵌入笔记**：可将诗歌 PDF 或 MP3 嵌入笔记，或者复制链接到笔记。
+- **可自行更换 PDF 和 MP3**：如果你有更好的 PDF 或 MP3 资源，可自行替换原始文件，也可新增文件，只要按照命名规律改名字即可。
 - **自动检测更新**：启动时（默认 12 小时节流一次）比对云端版本，发现新版本弹通知，更新后展示更新说明并可查看历史。
 
 ## 安装
 
 ### 方式一：手动安装（GitHub）
 
-1. 下载本仓库 `main.js` / `styles.css` / `manifest.json` 三个文件（**只需这三个**，PDF.js 已内联在 `main.js` 中，无需拷贝 `lib/`）。
+1. 下载本仓库 `main.js` / `styles.css` / `manifest.json` 三个文件
 2. 在 Obsidian 库里新建文件夹 `.obsidian/plugins/hymns/`，把三个文件放进去。
 3. 重启 Obsidian，在「设置 → 第三方插件」中启用 Hymns。
 4. 首次使用在插件设置里指定 PDF 文件夹与 MP3 文件夹（留空 = 扫描整个仓库）。
@@ -31,7 +35,6 @@
 ## 设置
 
 - **PDF 文件夹 / MP3 文件夹**：留空 = 扫描整个仓库。诗歌靠文件名编号识别（如 `D116`、`E836（补充版）`）。
-- **联动**：在底部播放栏「联动」里勾选 MP3 随 PDF 切换 / PDF 随 MP3 切换。
 - **重建索引 / 歌词索引**：改了文件夹或新增诗歌后重建。
 - **更新**：自动检查更新开关、立即检查更新、查看当前版本说明、查看历史更新。
 
@@ -77,6 +80,21 @@ hymns/
 
 Browse, search, play and bookmark hymns: instant search by number (e.g. `D116`) or keywords, PDF preview, MP3 playback, favourites and playlists. Works on desktop and mobile.
 
+<img src="images/Hymns.png" alt="Hymns plugin showcase" width="480" />
+
+### Supported hymn series
+
+The plugin recognizes the following hymn series by their file-name prefix and groups them accordingly:
+
+- **Great Hymns** (大本诗歌, `D`)
+- **Supplementary Hymns** (补充诗歌, `B`)
+- **Hymn Writers** (唱诗人, `C`)
+- **New Songs of Praise** (新歌颂咏, `X`)
+- **Children's Hymns** (儿童诗歌, `E`)
+- **Youth Hymns** (青年诗歌, `Q`)
+- **Special Meeting Hymns** (特会诗歌, `T`)
+- **Other Hymns** (其他诗歌, `O`) — a catch-all group for anything that does not match the series above
+
 ### Installation
 
 Manual installation:
@@ -94,6 +112,8 @@ Via BRAT: add `ViaCai/Hymns` in the BRAT plugin and let it install the latest re
 2. Hymn numbers are detected from file names, e.g. `D116 <title>.pdf` or `D116-<title>.mp3`.
 3. On every startup the plugin scans the vault and builds the hymn index and the lyrics index automatically.
 4. Open the Hymns view from the ribbon, then search, preview the PDF and play the MP3.
+5. **Copy a link or embed to your note** — on any hymn, open the "more" (⋯) menu and copy a wiki link or an embed for its PDF or MP3, e.g. `[[D116.pdf]]` or `![[D116.pdf]]` (and the same for MP3). Paste them straight into any note.
+6. **Replace or add your own PDF/MP3** — if you have better audio or scanned PDFs, just replace the existing files or drop in new ones following the same naming rule. The plugin re-indexes on the next startup, or you can trigger it with **Rebuild index** in the settings.
 
 ### Settings
 
@@ -127,4 +147,3 @@ MIT License（见 [LICENSE](LICENSE)）
 加6:10 所以我们有了时机，就当向众人行善，尤其是向信仰之家的人。
 
 <img src="https://raw.githubusercontent.com/ViaCai/bitiful-helper/main/images/wechat-pay.png" alt="微信收款码" width="240" />
-

@@ -104,6 +104,18 @@ const UPDATE_BASE = 'https://raw.githubusercontent.com/' + UPDATE_REPO + '/' + U
 
 // ==================== 更新日志内容（供弹窗离线展示；缺失时回退到远端 CHANGELOG.md）====================
 const CHANGELOG_CONTENT = {
+  '1.0.2': `## [1.0.2] - 2026-10-16
+
+### 修复
+- **修复「检查更新失败：this.saveSettings is not a function」**：更新流程（手动「立即检查更新」与启动时自动检查）调用了未定义的方法 \`saveSettings\`，导致检查在联网前即中断，桌面端与移动端（iOS / iPadOS / Android）均无法检查与自动更新。现已补齐该方法，并让节流时间戳的保存失败不再阻断后续的联网比对。
+- **修复后即可全平台自动更新**：Windows、macOS、Linux、Android、iOS、iPadOS 上，启动时会自动比对云端版本，检测到新版本即弹出更新提示框。
+
+### 改进
+- **自动更新改为「每次启动都检查」**：取消原来的 12 小时节流，每次启动 Obsidian 都会拉取云端版本比对一次（同一会话内 5 秒去抖，避免重复联网）。
+- **更新通知固定显示在右上角**：检测到新版本时在右上角弹出常驻通知，含「立即更新 / 查看详情 / 不再提醒」；点击通知正文或「查看详情」可打开更新说明。
+  - 不再因此前点过「稍后」而静默跳过，只要检测到新版本就会提示（会话内同版本只弹一次）。
+  - 「不再提醒」会记住版本；在设置里重新打开「自动检查更新」即可重置。
+`,
   '1.0.1': `## [1.0.1] - 2026-10-16
 
 ### 修复
@@ -118,7 +130,7 @@ const CHANGELOG_CONTENT = {
 ### 新增
 - **诗歌浏览 / 搜索 / 播放与收藏插件首次发布**：按编号（如 D116）或关键词（空格分隔，如 恩典 耶稣）实时搜索，侧边栏预览 PDF，播放 MP3，收藏与播放列表。桌面端与移动端通用。
 - **内置默认播放列表**：自带 7 个主题歌单（倪柝声 / 李常受 / 余洁麟 / 和受恩 / 霍华德 / 以撒·华滋 / 约翰·牛顿），首次加载自动写入，不覆盖你的自定义歌单。
-- **自动检测更新**：启动时（开启后 12 小时节流一次）拉取云端 manifest 比对版本；发现新版本弹出常驻通知，提供「立即更新 / 稍后」。更新成功后自动弹出更新说明，并可查看历史更新内容。
+- **自动检测更新**：每次启动 Obsidian 时拉取云端 manifest 比对版本；发现新版本在右上角弹出通知，提供「立即更新 / 查看详情 / 不再提醒」。更新成功后自动弹出更新说明，并可查看历史更新内容。
 - **播放列表管理增强**：删除改为图标按钮并二次确认；支持多选 / 全选批量删除；列表可上下排序；点击列表名直接打开明细；歌曲明细同样支持多选批量删除。
 `
 };
@@ -594,9 +606,14 @@ class HymnsSettingTab extends PluginSettingTab {
     containerEl.createEl('h2', { text: '更新' });
     new Setting(containerEl)
       .setName('自动检查更新')
-      .setDesc('启动时（每 12 小时至多一次）拉取云端版本信息，发现新版本弹出通知。关闭后仍可在下方手动检查。')
+      .setDesc('每次启动 Obsidian 时都会检查一次云端版本，发现新版本即在右上角弹出通知。关闭后仍可在下方手动检查。')
       .addToggle((t) => t.setValue(this.plugin.settings.autoCheckUpdate)
-        .onChange(async (v) => { this.plugin.settings.autoCheckUpdate = v; await this.plugin.saveAll(); }));
+        .onChange(async (v) => {
+          this.plugin.settings.autoCheckUpdate = v;
+          // 重新开启时清掉「不再提醒」的记录，让更新通知恢复
+          if (v) this.plugin.settings.dismissedVersion = '';
+          await this.plugin.saveAll();
+        }));
     new Setting(containerEl)
       .setName('检查更新')
       .setDesc('当前已安装版本：v' + currentVer + '。点击立即拉取云端最新版本。')
@@ -2229,7 +2246,7 @@ class HymnsPlugin extends Plugin {
       autoPlayMP3: false,
       playMode: 'sequential',
       pdfFollow: false,     // PDF 联动：选中后侧边栏 PDF 随播放变动，默认关闭
-      autoCheckUpdate: true, // 启动时自动检测更新（12 小时节流一次）
+      autoCheckUpdate: true, // 每次启动 Obsidian 都自动检测一次更新
       lastVersion: '',       // 上次已记录的版本号，用于判断「是否升级」并弹更新说明
       dismissedVersion: '',  // 用户点「稍后」的版本号，避免重复打扰
       lastUpdateCheckAt: 0   // 上次检查更新的时间戳（毫秒），用于节流
@@ -2275,7 +2292,7 @@ class HymnsPlugin extends Plugin {
         }
       }
       if (this.view) this.view.renderListMode();
-      // 启动后自动检测更新（受 settings.autoCheckUpdate 与 12 小时节流控制）
+      // 启动后自动检测更新（每次启动都检查，仅受 settings.autoCheckUpdate 控制）
       this.onUpdateFlow();
     });
   }
@@ -2288,6 +2305,11 @@ class HymnsPlugin extends Plugin {
     return { settings: this.settings, playlists: this.playlists, recent: this.recent, removedBuiltinIds: this.removedBuiltinIds };
   }
   async saveAll() { await this.saveData(this.allData()); }
+  /* 保存设置（连同歌单等一并写入同一份 data.json）。
+     自动更新流程多处调用 saveSettings()，此前该方法缺失，导致
+     checkForUpdate() 在联网前即抛「this.saveSettings is not a function」，
+     手动/启动检查更新全部失败——此处补齐。 */
+  async saveSettings() { await this.saveAll(); }
 
   /* 动态解析插件自身目录（跨平台最可靠）：优先用 manifest.dir（Obsidian 加载插件时写入的真实文件夹名），
      否则扫描 .obsidian/plugins 按 manifest.id 反查，最后按 id 兜底拼接。 */
@@ -2851,9 +2873,12 @@ class HymnsPlugin extends Plugin {
     try {
       if (!manual && !this.settings.autoCheckUpdate) return;
       const now = Date.now();
-      if (!manual && now - (this.settings.lastUpdateCheckAt || 0) < 12 * 3600 * 1000) return;
+      // 每次启动都检查（不再做 12 小时节流）；仅保留同一次会话内的重复调用去抖（5 秒），
+      // 避免 onUpdateFlow 等路径在极短时间内重复联网。手动检查不受此限制。
+      if (!manual && now - (this.settings.lastUpdateCheckAt || 0) < 5 * 1000) return;
       this.settings.lastUpdateCheckAt = now;
-      await this.saveSettings();
+      // 记录节流时间戳；保存失败不应阻断后续的联网比对（此前因 saveSettings 缺失直接中断）
+      try { await this.saveSettings(); } catch (e) { console.warn('[Hymns] 保存检查时间戳失败:', e && e.message); }
 
       const resp = await requestUrl({ url: UPDATE_BASE + 'manifest.json', method: 'GET', timeout: 10000 });
       if (resp.status !== 200) { if (manual) new Notice('检查更新失败，无法获取版本信息'); return; }
@@ -2864,7 +2889,9 @@ class HymnsPlugin extends Plugin {
         if (manual) {
           const changelog = await this.getChangelogFor(latest);
           new HymnsUpdateModal(this.app, this, latest, changelog, { title: 'Hymns 有可用更新 v' + latest }).open();
-        } else if (this.settings.dismissedVersion !== latest) {
+        } else {
+          // 自动检查每次启动都执行：只要发现新版本就在右上角弹出更新通知
+          // （不再因用户此前点过「稍后」而静默跳过；同一会话内同一版本只弹一次）
           this.showUpdateNotification(latest);
         }
       } else if (manual) {
@@ -2876,26 +2903,55 @@ class HymnsPlugin extends Plugin {
     }
   }
 
-  /* 右下角常驻通知：立即更新 / 稍后 */
+  /* 更新通知（Obsidian 原生 Notice 显示在右上角）：
+     - 点击正文 → 打开更新说明弹窗（内含「立即更新」按钮）
+     - 「立即更新」按钮 → 直接下载并更新
+     - 关闭按钮 → 关闭；「不再提醒」→ 记住该版本，后续启动不再弹（可在设置改动后自动重置）
+     同一会话内同一版本只弹一次（_updateNoticeShown 去重），避免重复检查时刷屏。 */
   showUpdateNotification(latestVersion) {
-    const notice = new Notice('', 0);
+    // 会话内去重：同一版本本次运行只提示一次
+    if (this._updateNoticeShown === latestVersion) return;
+    this._updateNoticeShown = latestVersion;
+
+    const notice = new Notice('', 0); // timeout=0 → 常驻，直到用户操作
     const frag = document.createDocumentFragment();
     const wrap = document.createElement('div');
-    wrap.style.padding = '8px'; wrap.style.minWidth = '280px';
-    wrap.innerHTML = '<div style="font-weight:600;margin-bottom:6px;">📢 Hymns 有新版本</div>' +
-      '<div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">最新版本: v' + latestVersion + ' ｜ 当前版本: v' + this.manifest.version + '</div>';
+    wrap.style.padding = '6px 4px'; wrap.style.minWidth = '300px'; wrap.style.maxWidth = '360px';
+    const titleEl = document.createElement('div');
+    titleEl.style.cssText = 'font-weight:600;margin-bottom:6px;display:flex;align-items:center;gap:6px;';
+    titleEl.textContent = '📢 Hymns 有新版本可更新';
+    const descEl = document.createElement('div');
+    descEl.style.cssText = 'font-size:12px;color:var(--text-muted);margin-bottom:8px;';
+    descEl.textContent = '最新版本 v' + latestVersion + '（当前 v' + this.manifest.version + '）';
+    descEl.style.cursor = 'pointer';
     const btnWrap = document.createElement('div');
-    btnWrap.style.display = 'flex'; btnWrap.style.gap = '8px';
+    btnWrap.style.cssText = 'display:flex;gap:8px;align-items:center;';
     const updateBtn = document.createElement('button');
     updateBtn.className = 'mod-cta'; updateBtn.textContent = '立即更新';
-    updateBtn.style.fontSize = '12px'; updateBtn.style.padding = '4px 12px';
-    const laterBtn = document.createElement('button');
-    laterBtn.textContent = '稍后'; laterBtn.style.fontSize = '12px'; laterBtn.style.padding = '4px 12px';
-    btnWrap.appendChild(updateBtn); btnWrap.appendChild(laterBtn);
-    wrap.appendChild(btnWrap); frag.appendChild(wrap); notice.setMessage(frag);
+    updateBtn.style.cssText = 'font-size:12px;padding:4px 12px;';
+    const detailBtn = document.createElement('button');
+    detailBtn.textContent = '查看详情'; detailBtn.style.cssText = 'font-size:12px;padding:4px 12px;';
+    const muteBtn = document.createElement('button');
+    muteBtn.textContent = '不再提醒'; muteBtn.style.cssText = 'font-size:12px;padding:4px 12px;';
+    btnWrap.appendChild(updateBtn); btnWrap.appendChild(detailBtn); btnWrap.appendChild(muteBtn);
 
-    laterBtn.addEventListener('click', () => { this.settings.dismissedVersion = latestVersion; this.saveSettings(); notice.hide(); });
-    updateBtn.addEventListener('click', async () => { notice.hide(); await this.performUpdate(latestVersion); });
+    wrap.appendChild(titleEl); wrap.appendChild(descEl); wrap.appendChild(btnWrap);
+    frag.appendChild(wrap); notice.setMessage(frag);
+
+    const openDetail = async () => {
+      const changelog = await this.getChangelogFor(latestVersion);
+      new HymnsUpdateModal(this.app, this, latestVersion, changelog, { title: '📢 Hymns 有可用更新 v' + latestVersion }).open();
+    };
+    // 点击整块正文即打开详情（引导用户去更新）
+    wrap.addEventListener('click', (e) => { if (e.target === wrap || e.target === titleEl || e.target === descEl) openDetail(); });
+    detailBtn.addEventListener('click', (e) => { e.stopPropagation(); openDetail(); });
+    updateBtn.addEventListener('click', async (e) => { e.stopPropagation(); notice.hide(); await this.performUpdate(latestVersion); });
+    muteBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.settings.dismissedVersion = latestVersion;
+      try { this.saveSettings(); } catch (err) { /* 忽略保存失败 */ }
+      notice.hide();
+    });
   }
 
   /* 下载并覆盖插件本体；覆盖前把旧文件备份为 .old，完成后提示重启并弹出更新说明 */
