@@ -4,6 +4,7 @@
  * 用法: node scripts/release.mjs <版本号>   例: node scripts/release.mjs 1.0.1
  *
  * 做的事:
+ *   0. 重新内联 lib/ 里的 PDF.js 到 main.js（确保发布产物自包含；幂等，内容不变则无 diff）
  *   1. 把 manifest.json 的 version 改成新版本（保留 minAppVersion）
  *   2. 在 versions.json 追加 新版本 -> minAppVersion（按版本号降序）
  *   3. git add + commit "Release x.y.z"
@@ -11,10 +12,11 @@
  *   5. 推送 main 与 tag
  * 之后 GitHub Actions 会自动创建 Release 并附上 main.js / styles.css / manifest.json。
  *
- * 注意: 打 tag 前请先手动在 CHANGELOG.md 写好该版本的更新内容。
+ * 注意: 打 tag 前请先手动在 CHANGELOG.md 写好该版本的更新内容
+ *        （以及 main.js 顶部 CHANGELOG_CONTENT 里对应的条目，供更新弹窗离线展示）。
  */
 import { readFileSync, writeFileSync } from 'fs';
-import { execSync } from 'child_process';
+import { execSync, execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
@@ -24,6 +26,14 @@ const root = join(__dirname, '..');
 const version = process.argv[2];
 if (!version || !/^\d+\.\d+\.\d+$/.test(version)) {
   console.error('用法: node scripts/release.mjs <版本号, 如 1.0.1>');
+  process.exit(1);
+}
+
+// 0. 刷新 main.js 内联的 PDF.js（保证官方市场只下载三个文件也能用）
+try {
+  execFileSync(process.execPath, [join(__dirname, 'embed-pdfjs.mjs')], { cwd: root, stdio: 'inherit' });
+} catch (e) {
+  console.error('内联 PDF.js 失败:', e.message);
   process.exit(1);
 }
 
@@ -57,7 +67,7 @@ console.log('versions.json -> 追加 ' + version + ' -> ' + minApp);
 
 // 3. git 提交 + 打 tag + 推送
 try {
-  execSync('git add manifest.json versions.json', { cwd: root, stdio: 'inherit' });
+  execSync('git add manifest.json versions.json main.js', { cwd: root, stdio: 'inherit' });
   execSync('git commit -m "Release ' + version + '"', { cwd: root, stdio: 'inherit' });
 } catch (e) {
   console.error('提交失败（可能无改动被提交，可忽略）:', e.message);

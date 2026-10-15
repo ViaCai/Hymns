@@ -2,7 +2,7 @@
 
 诗歌浏览、搜索、播放与收藏插件：按编号（如 `D116`）或关键词（空格分隔，如 `恩典 耶稣`）实时搜索，预览 PDF，播放 MP3，收藏与播放列表。桌面端与移动端通用。
 
-注意：插件本体只有几KB，本插件还需要去QQ群1128049033中下载诗歌PDF（500MB）和MP3（3.79 GB），下载好请解压到你的obsidian里你自己的仓库任意位置。每次启动时，插件会自动扫描仓库，创建诗歌索引和歌词索引。
+注意：插件本体约 1.5 MB（已内置 PDF.js 解析库，**安装只需要 `main.js` / `styles.css` / `manifest.json` 三个文件**，无需额外文件）。诗歌 PDF（约 500 MB）与 MP3（约 3.79 GB）体积较大，请到 QQ 群 1128049033 下载，解压到你 Obsidian 仓库的任意位置。每次启动时，插件会自动扫描仓库并创建诗歌索引和歌词索引。
 
 ## 功能
 
@@ -17,7 +17,7 @@
 
 ### 方式一：手动安装（GitHub）
 
-1. 下载本仓库 `main.js` / `styles.css` / `manifest.json` 三个文件。
+1. 下载本仓库 `main.js` / `styles.css` / `manifest.json` 三个文件（**只需这三个**，PDF.js 已内联在 `main.js` 中，无需拷贝 `lib/`）。
 2. 在 Obsidian 库里新建文件夹 `.obsidian/plugins/hymns/`，把三个文件放进去。
 3. 重启 Obsidian，在「设置 → 第三方插件」中启用 Hymns。
 4. 首次使用在插件设置里指定 PDF 文件夹与 MP3 文件夹（留空 = 扫描整个仓库）。
@@ -63,7 +63,7 @@ hymns/
 ├── main.js          # 插件主体
 ├── styles.css       # 样式
 ├── manifest.json    # 插件元信息
-├── lib/             # 依赖库（如 PDF.js）
+├── lib/             # 开发用：PDF.js 源文件（发布版已内联进 main.js，安装时不需要此目录）
 ├── versions.json    # 各版本最低 Obsidian 版本
 ├── CHANGELOG.md     # 更新日志
 └── README.md
@@ -83,7 +83,7 @@ Manual installation:
 
 1. Download `main.js`, `styles.css` and `manifest.json` from the [latest release](https://github.com/ViaCai/Hymns/releases/latest).
 2. Create the folder `<your-vault>/.obsidian/plugins/hymns/`.
-3. Put the three files into that folder.
+3. Put the three files into that folder. These three files are all you need — PDF.js is bundled inside `main.js`.
 4. Reload Obsidian, then enable **Hymns** in *Settings → Community plugins*.
 
 Via BRAT: add `ViaCai/Hymns` in the BRAT plugin and let it install the latest release.
@@ -106,17 +106,21 @@ Via BRAT: add `ViaCai/Hymns` in the BRAT plugin and let it install the latest re
 
 - **Vault enumeration** — the plugin lists the files in your vault in order to locate hymn PDF/MP3 files. This is required so that you do not have to configure each file manually.
 - **Clipboard access** — used only when you click on "Copy lyrics".
-- **Dynamic code execution** — the bundled PDF.js library is evaluated with `new Function` inside an isolated sandbox object (`evalPdfLibIsolated`). This keeps the library out of the global scope and allows PDF rendering to work on mobile without a Web Worker.
+- **Dynamic code execution** — the bundled PDF.js library is evaluated with `new Function` inside an isolated sandbox object (`evalPdfLibIsolated`). This keeps the library out of the global scope and allows PDF rendering to work on mobile without a Web Worker. All code is bundled locally inside `main.js` — nothing is downloaded or executed from the network.
 
 ### License
 
-MIT
+MIT — see [LICENSE](LICENSE).
+
+This plugin bundles [PDF.js](https://github.com/mozilla/pdf.js) v3.11.174 (Apache License 2.0); its copyright and license notice are preserved inline in `main.js`.
 
 ---
 
 ## 许可证
 
 MIT License（见 [LICENSE](LICENSE)）
+
+本插件内联打包了 [PDF.js](https://github.com/mozilla/pdf.js) v3.11.174（Apache License 2.0），其版权与许可声明随源码一并保留在 `main.js` 中。
 
 ## ☕ 如果觉得这款插件对您有帮助，也可以支持我的项目
 
