@@ -33,6 +33,27 @@
 - **重建索引 / 歌词索引**：改了文件夹或新增诗歌后重建。
 - **更新**：自动检查更新开关、立即检查更新、查看当前版本说明、查看历史更新。
 
+## 发布（提交 Obsidian 官方插件市场）
+
+本仓库采用「打 tag 自动出 Release」的流程，无需手动在 GitHub 建 Release。
+
+1. 在 `CHANGELOG.md` 顶部写好新版本的更新内容（按 `## [x.y.z] - 日期` 格式）。
+2. 运行一键发版脚本（会自动改 `manifest.json` / `versions.json`、提交、打 tag、推送）：
+   ```bash
+   node scripts/release.mjs 1.0.1
+   ```
+   > 首次发布当前 1.0.0 时，直接打 tag 即可：
+   > ```bash
+   > git tag 1.0.0 && git push origin 1.0.0
+   > ```
+3. GitHub Actions 会自动创建 Release，并附上 `main.js` / `styles.css` / `manifest.json`。
+4. 到 [obsidianmd/obsidian-releases](https://github.com/obsidianmd/obsidian-releases) 提 PR，在 `community-plugins.json` 加入：
+   ```json
+   { "id": "hymns", "name": "Hymns", "author": "ViaCai", "repo": "ViaCai/Hymns" }
+   ```
+
+插件自身的**自动检测更新**读取的是 `main` 分支的原始文件，与官方市场的 Release 分发互不冲突，二者可同时生效。
+
 ## 目录结构
 
 ```
@@ -46,4 +67,13 @@ hymns/
 └── README.md
 ```
 
-`lyrics.json` 不纳入版本库（体积大，且随个人 PDF 重建）。
+## 许可证
+
+MIT License
+
+## ☕ 如果觉得这款插件对您有帮助，也可以支持我的项目
+
+加6:10 所以我们有了时机，就当向众人行善，尤其是向信仰之家的人。
+
+<img src="https://raw.githubusercontent.com/ViaCai/bitiful-helper/main/images/wechat-pay.png" alt="微信收款码" width="240" />
+

@@ -1,14 +1,16 @@
 name: Release
 
+# 打 tag（如 v1.0.1 或 1.0.1）即自动创建 GitHub Release，并把三个插件文件作为附件。
+# Obsidian 官方插件市场会从该 Release 拉取 main.js / styles.css / manifest.json。
 on:
   push:
     tags:
       - '*'
 
 permissions:
-  id-token: write
-  contents: write
-  attestations: write
+  contents: write      # 创建 Release / 上传附件
+  attestations: write  # 生成构建来源证明
+  id-token: write      # 证明所需 OIDC 令牌
 
 jobs:
   release:
@@ -16,6 +18,21 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          # 三个文件必须作为 Release 附件，官方市场据此更新插件
+          files: |
+            main.js
+            styles.css
+            manifest.json
+          # Release 说明直接用仓库里的 CHANGELOG.md（含该版本更新内容）
+          body_path: CHANGELOG.md
+          # 同名 Release 已存在则覆盖，便于重发
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Attest release assets
         uses: actions/attest-build-provenance@v1
