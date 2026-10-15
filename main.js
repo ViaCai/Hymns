@@ -2256,14 +2256,13 @@ class HymnsPlugin extends Plugin {
       if (!this.hymns.length) {
         // 0 首必须明说，否则用户只会看到“空列表”而无从下手
         new Notice('Hymns：没有扫描到任何诗歌 PDF。请到设置里把「PDF 文件夹」留空（扫描整个仓库），或用「自动检测」一键定位。', 12000);
-      } else if (!Object.keys(this.lyrics).length) {
-        // 有诗歌 PDF 但还没建歌词索引 → 首次启动自动建立（带进度提示），无需手动点按钮。
-        // 自动建完后 lyrics.json 已落盘（即便全是图片型 PDF 也会写入 _empty 占位），
-        // 故下次启动 loadLyrics 读到非空即跳过，不会反复慢启动。
+      } else {
+        // 有诗歌 PDF → 每次启动增量同步歌词索引（已建好的秒跳过；仅处理新增/缺失；0 新增时完全不打扰）。
+        // silent=true：仅当确有新 PDF 才弹进度/完成提示，避免每次启动刷屏；无变化则不重写 lyrics.json。
         try {
-          await this.rebuildLyrics(false);
+          await this.rebuildLyrics(false, true);
         } catch (e) {
-          new Notice('自动建立歌词索引失败：' + (e && e.message ? e.message : e) + '。可到设置手动点“重建歌词索引”。', 10000);
+          new Notice('自动同步歌词索引失败：' + (e && e.message ? e.message : e) + '。可到设置手动点“重建歌词索引”。', 10000);
         }
       }
       if (this.view) this.view.renderListMode();
@@ -2389,8 +2388,9 @@ class HymnsPlugin extends Plugin {
   }
 
   /* 一键重建歌词索引：插件内用 pdf.js 抽取 PDF 文本（默认仅新增/缺失；full=true 全量重抽） */
-  async rebuildLyrics(full) {
-    const notice = new Notice('正在准备歌词索引…', 0);
+  async rebuildLyrics(full, silent) {
+    // silent（自动同步模式）：默认不弹提示；仅当确有新增/缺失 PDF 待抽时才懒创建进度提示
+    let notice = silent ? null : new Notice('正在准备歌词索引…', 0);
     try {
       const lib = await this.ensurePdfLib();
       const base = (!full && this.lyrics && Object.keys(this.lyrics).length) ? this.lyrics : {};
@@ -2407,13 +2407,14 @@ class HymnsPlugin extends Plugin {
       let done = 0, skipped = 0, empty = 0, failed = 0;
       const failures = [];
       const t0 = Date.now();
-      if (full) notice.setMessage('完整重建将重抽全部 ' + total + ' 首 PDF，耗时较长，请耐心等待…');
+      if (full && notice) notice.setMessage('完整重建将重抽全部 ' + total + ' 首 PDF，耗时较长，请耐心等待…');
       for (const file of files) {
         const parsed = parsePdfCode(file.name);
         if (!parsed) { done++; continue; }
         const uid = uidOfPath.get(file.path) || parsed.code;
         const ex = result[uid];
         if (!full && ex && ((ex.lyrics || '').length || ex._empty)) { done++; skipped++; continue; }
+        if (!notice) notice = new Notice('正在准备歌词索引…', 0);   // 懒创建：仅当遇到确需抽取的 PDF
         try {
           let buf = null;
           try { buf = await this.app.vault.readBinary(file.path); }
@@ -2453,24 +2454,28 @@ class HymnsPlugin extends Plugin {
           const pct = total ? Math.round(done / total * 100) : 100;
           const el = (Date.now() - t0) / 1000;
           const eta = done > 0 ? Math.max(0, Math.round(el / done * (total - done))) : 0;
-          notice.setMessage('正在生成歌词索引…（' + pct + '% · 剩余约 ' + eta + 's' + (failed ? ' · 失败 ' + failed : '') + '）');
+          if (notice) notice.setMessage('正在生成歌词索引…（' + pct + '% · 剩余约 ' + eta + 's' + (failed ? ' · 失败 ' + failed : '') + '）');
           await sleep(0);
         }
       }
       const rel = await this.getPluginRel();
-      await this.app.vault.adapter.write(rel + '/lyrics.json', JSON.stringify(result));
-      // 把失败详情落盘，便于排查（没有失败时也写一份空报告）
-      try {
-        await this.app.vault.adapter.write(rel + '/lyrics-failures.json', JSON.stringify({
-          time: new Date().toISOString(),
-          pdfLib: this._pdfLibSource || 'unknown',
-          total: total, skipped: skipped, empty: empty, failed: failed,
-          failures: failures,
-        }, null, 1));
-      } catch (e) { /* ignore */ }
-      this.lyrics = result;
-      notice.hide();
       const added = Object.keys(result).length - baseCount;
+      const changed = added > 0 || empty > 0 || failed > 0;
+      this.lyrics = result;
+      // 静默且无变化：避免每次启动都重写 3.8MB 的 lyrics.json（Obsidian Sync / 备份用户尤需避免）
+      if (!silent || changed) {
+        await this.app.vault.adapter.write(rel + '/lyrics.json', JSON.stringify(result));
+        // 把失败详情落盘，便于排查（没有失败时也写一份空报告）
+        try {
+          await this.app.vault.adapter.write(rel + '/lyrics-failures.json', JSON.stringify({
+            time: new Date().toISOString(),
+            pdfLib: this._pdfLibSource || 'unknown',
+            total: total, skipped: skipped, empty: empty, failed: failed,
+            failures: failures,
+          }, null, 1));
+        } catch (e) { /* ignore */ }
+      }
+      if (notice) notice.hide();
       const parts = [
         '共 ' + Object.keys(result).length + ' 首',
         (full ? ('重抽 ' + total) : ('新增/更新 ' + added)),
@@ -2479,11 +2484,12 @@ class HymnsPlugin extends Plugin {
       ];
       if (failed) parts.push('失败 ' + failed + '（详情见 lyrics-failures.json）');
       const summary = (full ? '完整重建完成：' : '歌词索引已更新：') + parts.join('，');
-      new Notice(summary, failed ? 9000 : 6000);
+      // 静默且无变化 → 完全不打扰；否则（手动或确有新增）照常提示
+      if (!(silent && !changed)) new Notice(summary, failed ? 9000 : 6000);
       if (failed) console.warn('[Hymns] 歌词抽取失败清单：', failures);
       if (this.view) this.view.renderListMode();
     } catch (e) {
-      notice.hide();
+      if (notice) notice.hide();
       console.error('[Hymns] 歌词索引生成失败', e);
       new Notice('歌词索引生成失败：' + e.message);
     }
