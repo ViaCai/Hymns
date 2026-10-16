@@ -14,6 +14,8 @@
 - **收藏与播放列表**：收藏诗歌；内置 7 个主题歌单（倪柝声 / 李常受 / 余洁麟 / 和受恩 / 霍华德 / 以撒·华滋 / 约翰·牛顿），也可自建歌单。
 - **联动**：可在底部播放栏「联动」里勾选 MP3 随 PDF 切换以及 PDF 随 MP3 切换。
 - **复制链接或嵌入笔记**：可将诗歌 PDF 或 MP3 嵌入笔记，或者复制链接到笔记。
+- **长按定位**：搜索结果里长按一首诗歌，跳到它在分类中的位置；搜索框右侧出现返回按钮，点击回到原搜索界面（位置保留），重新输入检索则自动消失。
+- **PDF 滑动切歌**：侧边栏预览 PDF 时左右滑动（或鼠标拖拽）即可切到上一首 / 下一首。
 - **可自行更换 PDF 和 MP3**：如果你有更好的 PDF 或 MP3 资源，可自行替换原始文件，也可新增文件，只要按照命名规律改名字即可。
 - **自动检测更新**：启动时（默认 12 小时节流一次）比对云端版本，发现新版本弹通知，更新后展示更新说明并可查看历史。
 
@@ -113,7 +115,9 @@ Via BRAT: add `ViaCai/Hymns` in the BRAT plugin and let it install the latest re
 3. On every startup the plugin scans the vault and builds the hymn index and the lyrics index automatically.
 4. Open the Hymns view from the ribbon, then search, preview the PDF and play the MP3.
 5. **Copy a link or embed to your note** — on any hymn, open the "more" (⋯) menu and copy a wiki link or an embed for its PDF or MP3, e.g. `[[D116.pdf]]` or `![[D116.pdf]]` (and the same for MP3). Paste them straight into any note.
-6. **Replace or add your own PDF/MP3** — if you have better audio or scanned PDFs, just replace the existing files or drop in new ones following the same naming rule. The plugin re-indexes on the next startup, or you can trigger it with **Rebuild index** in the settings.
+6. **Long-press to locate** — long-press a hymn in the search results to jump to its position in the category list; a back button appears next to the search box to return to the original search view (previous position kept). Typing a new search dismisses the button.
+7. **Swipe in the PDF preview** — swipe left/right (or drag with the mouse) in the sidebar PDF preview to go to the previous / next hymn. Vertical scrolling is unaffected.
+8. **Replace or add your own PDF/MP3** — if you have better audio or scanned PDFs, just replace the existing files or drop in new ones following the same naming rule. The plugin re-indexes on the next startup, or you can trigger it with **Rebuild index** in the settings.
 
 ### Settings
 

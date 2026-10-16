@@ -104,6 +104,12 @@ const UPDATE_BASE = 'https://raw.githubusercontent.com/' + UPDATE_REPO + '/' + U
 
 // ==================== 更新日志内容（供弹窗离线展示；缺失时回退到远端 CHANGELOG.md）====================
 const CHANGELOG_CONTENT = {
+  '1.0.3': `## [1.0.3] - 2026-10-16
+
+### 新增
+- **长按定位（搜索结果 → 分类位置）**：在搜索结果里长按一首诗歌，直接跳到它所在分类的位置；搜索框右侧出现「返回」按钮，点击回到原搜索界面（搜索词/页码/滚动位置保留）。重新输入搜索内容，返回按钮自动消失。
+- **PDF 左右滑动切歌**：侧边栏预览 PDF 时，从左往右滑（或鼠标拖拽）切到上一首，从右往左滑切到下一首；上下滚动阅读不受影响。
+`,
   '1.0.2': `## [1.0.2] - 2026-10-16
 
 ### 修复
@@ -1307,6 +1313,7 @@ class HymnsView extends ItemView {
     this._pdfDoc = null;
     this._pdfToken = 0;      // PDF 渲染令牌（翻页并发保护）
     this.isPlaying = false;
+    this._jumpBack = null;   // 长按跳转的返回点：{query, catFilter, page, scrollTop}
 
     const root = this.contentEl;
     root.empty();
@@ -1338,6 +1345,16 @@ class HymnsView extends ItemView {
     this.searchEl.addEventListener('input', () => this.onQueryChanged());
     this.searchEl.addEventListener('keydown', (e) => this.onKey(e));
 
+    // 返回按钮（搜索框最右）：长按搜索结果跳到分类位置后出现，点击返回原搜索界面
+    this.backBtn = footSearch.createEl('button', {
+      cls: 'hymns-icon-btn hymns-back-btn',
+      attr: { 'aria-label': '返回搜索结果', title: '返回搜索结果' }
+    });
+    setIcon(this.backBtn, 'arrow-left');
+    if (!this.backBtn.querySelector('svg')) setIcon(this.backBtn, 'undo-2'); // 图标兜底
+    this.backBtn.style.display = 'none';
+    this.backBtn.addEventListener('click', () => this.exitJumpState());
+
     const footNav = foot.createDiv({ cls: 'hymns-foot-nav' });
     // 分类：单个按钮，显示当前分类名；默认“全部诗歌”，点击弹出分类菜单
     this.catBtn = footNav.createEl('button', { cls: 'hymns-cat-btn', attr: { 'aria-label': '选择分类' } });
@@ -1362,6 +1379,7 @@ class HymnsView extends ItemView {
     this.viewerToolbar = this.viewerWrap.createDiv({ cls: 'hymns-viewer-toolbar' });
     this.viewerBody = this.viewerWrap.createDiv({ cls: 'hymns-viewer-body' });
     this.viewerActions = this.viewerWrap.createDiv({ cls: 'hymns-viewer-actions' });
+    this.bindViewerSwipe();
 
     // 播放栏（固定）
     this.buildPlayer(root);
@@ -1544,6 +1562,8 @@ class HymnsView extends ItemView {
 
   onQueryChanged() {
     this.query = this.searchEl.value || '';
+    // 重新输入检索内容 → 丢弃长按跳转的返回点，返回按钮消失
+    if (this._jumpBack) { this._jumpBack = null; this.showBackBtn(false); }
     this.page = 0;
     this.selectedIndex = -1;
     this.renderList();
@@ -1575,6 +1595,60 @@ class HymnsView extends ItemView {
     this.page = 0;
     this.selectedIndex = -1;
     this.renderList();
+  }
+
+  /* ---- 长按跳转（搜索结果 → 分类位置）----
+     在搜索结果里长按一首诗歌：跳到它所在分类的列表位置（方便查看前后诗歌），
+     搜索框右侧出现返回按钮；点返回恢复原搜索词/分类/页码/滚动位置；
+     重新输入搜索内容则返回点作废、按钮消失。 */
+  enterJumpState(h) {
+    if (!h || this._jumpBack) return;              // 已在跳转态：不覆盖原返回点
+    if (!this.query.trim()) return;                // 仅搜索结果提供该操作
+    // 1) 记住返回点：搜索词、分类、页码、列表滚动位置
+    this._jumpBack = {
+      query: this.query,
+      catFilter: this.catFilter,
+      page: this.page,
+      scrollTop: this.resultsEl ? this.resultsEl.scrollTop : 0,
+    };
+    // 2) 清空搜索 → 切到该诗歌所属分类 → 定位到它所在编号区间的页
+    const letter = KNOWN_LETTERS.has(h.letter) ? h.letter : 'O';
+    this.query = '';
+    this.searchEl.value = '';
+    this.catFilter = letter;
+    this.updateCatBtn();
+    this.selectedIndex = -1;
+    const list = this.computeList() || [];
+    const pages = buildPages(list);
+    const idx = pages.findIndex((pg) => pg.items.some((x) => x.uid === h.uid));
+    this.page = idx >= 0 ? idx : 0;
+    this.showBackBtn(true);
+    this.renderList();
+    // 3) 滚动到目标诗歌（渲染完成后）
+    requestAnimationFrame(() => {
+      if (!this.resultsEl) return;
+      const esc = (window.CSS && CSS.escape) ? CSS.escape(h.uid) : h.uid.replace(/["\\]/g, '\\$&');
+      const el = this.resultsEl.querySelector('[data-uid="' + esc + '"]');
+      if (el && el.scrollIntoView) el.scrollIntoView({ block: 'center' });
+    });
+  }
+  /* 点返回按钮：恢复长按跳转前的搜索界面（搜索词/分类/页码/滚动位置） */
+  exitJumpState() {
+    const st = this._jumpBack;
+    if (!st) return;
+    this._jumpBack = null;
+    this.showBackBtn(false);
+    this.query = st.query;
+    this.searchEl.value = st.query;
+    this.catFilter = st.catFilter;
+    this.updateCatBtn();
+    this.page = st.page;
+    this.selectedIndex = -1;
+    this.renderList();
+    requestAnimationFrame(() => { if (this.resultsEl) this.resultsEl.scrollTop = st.scrollTop; });
+  }
+  showBackBtn(show) {
+    if (this.backBtn) this.backBtn.style.display = show ? '' : 'none';
   }
   showCatMenu() {
     if (!this.catBtn) return;
@@ -1860,7 +1934,31 @@ class HymnsView extends ItemView {
     more.addEventListener('click', (e) => { e.stopPropagation(); this.showCopyMenu(h, e); });
 
     let timer = null;
+    // 长按（桌面按住鼠标 / 触屏按住 ~550ms，移动不超阈值）：搜索结果里跳到该诗歌所在分类位置
+    let lpTimer = null, lpFired = false, lpStart = null;
+    el.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;   // 鼠标仅左键
+      lpFired = false;
+      lpStart = { x: e.clientX, y: e.clientY };
+      if (lpTimer) clearTimeout(lpTimer);
+      lpTimer = setTimeout(() => {
+        lpTimer = null;
+        if (!this.query.trim()) return;                          // 非搜索结果不跳转
+        lpFired = true;                                          // 吞掉随后的 click，避免误打开 PDF
+        this.enterJumpState(h);
+      }, 550);
+    });
+    const lpCancel = () => { if (lpTimer) { clearTimeout(lpTimer); lpTimer = null; } };
+    el.addEventListener('pointerup', lpCancel);
+    el.addEventListener('pointercancel', lpCancel);
+    el.addEventListener('pointermove', (e) => {
+      // 手指/鼠标移出阈值（>8px）视为滚动，取消长按
+      if (lpTimer && lpStart && (Math.abs(e.clientX - lpStart.x) > 8 || Math.abs(e.clientY - lpStart.y) > 8)) lpCancel();
+    });
+    // 阻止长按触发系统级右键菜单 / iOS 触摸呼出，避免干扰跳转手势
+    el.addEventListener('contextmenu', (e) => e.preventDefault());
     el.addEventListener('click', () => {
+      if (lpFired) { lpFired = false; return; }
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => this.openInViewer(h), 220);
     });
@@ -2105,6 +2203,33 @@ class HymnsView extends ItemView {
     } else {
       body.createDiv({ cls: 'hymns-note', text: '可用下方“在新标签打开 PDF”按钮。' });
     }
+  }
+
+  /* PDF 查看器手势：左右滑动切歌（统一走 Pointer Events，鼠标拖拽与触屏滑动都支持）。
+     从左往右划（dx>0）= 上一首；从右往左划（dx<0）= 下一首。
+     只认「横向明显」的手势（|dx|≥60px 且 |dx|≥1.5×|dy|），纵向滚动不受影响。 */
+  bindViewerSwipe() {
+    if (!this.viewerBody) return;
+    this._swipe = null;
+    this.viewerBody.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      this._swipe = { id: e.pointerId, x: e.clientX, y: e.clientY };
+    });
+    this.viewerBody.addEventListener('pointermove', (e) => {
+      if (this._swipe && e.pointerId === this._swipe.id) {
+        this._swipe.dx = e.clientX - this._swipe.x;
+        this._swipe.dy = e.clientY - this._swipe.y;
+      }
+    });
+    this.viewerBody.addEventListener('pointerup', (e) => {
+      const s = this._swipe;
+      this._swipe = null;
+      if (!s || e.pointerId !== s.id) return;
+      const dx = (e.clientX - s.x), dy = (e.clientY - s.y);
+      if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+      this.viewerStep(dx > 0 ? -1 : 1);
+    });
+    this.viewerBody.addEventListener('pointercancel', () => { this._swipe = null; });
   }
 
   /* PDF 视图内的上一首/下一首：仅在“正在浏览的列表”内切换要查看的 PDF，

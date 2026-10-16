@@ -250,9 +250,17 @@ button.hymns-icon-btn.hymns-icon-btn.hymns-random-btn:hover { color: var(--inter
   border-radius: var(--radius-s);
   cursor: pointer;
   border: 1px solid transparent;
+  /* 长按 = 跳转到分类位置：禁掉系统的文本选择/触摸呼出，让手势干净触发 */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 .hymns-item:hover { background: var(--background-modifier-hover); }
 .hymns-item.is-selected { background: var(--background-modifier-active); border-color: var(--interactive-accent); }
+
+/* 返回按钮（搜索框最右）：仅长按跳转后出现 */
+button.hymns-icon-btn.hymns-icon-btn.hymns-back-btn { color: var(--text-accent); }
+button.hymns-icon-btn.hymns-icon-btn.hymns-back-btn:hover { color: var(--text-accent-hover, var(--text-accent)); }
 
 .hymns-badge {
   flex: 0 0 auto;
@@ -404,6 +412,8 @@ button.hymns-icon-btn.hymns-icon-btn svg {
   padding: 8px;
   display: flex; flex-direction: column; align-items: stretch;
   background: var(--background-secondary);
+  /* 只允许浏览器处理纵向滚动；横向滑动留给插件的「左右滑切歌」手势 */
+  touch-action: pan-y;
 }
 /* 画布尺寸/背景已由 JS 以内联样式设定（见 renderViewerPdf），此处仅作兜底并补一层阴影。 */
 .hymns-viewer-body canvas {
