@@ -115,6 +115,11 @@ const CHANGELOG_CONTENT = {
 ### 新增
 - **长按定位（搜索结果 → 分类位置）**：在搜索结果里长按一首诗歌，直接跳到它所在分类的位置；搜索框右侧出现「返回」按钮，点击回到原搜索界面（搜索词/页码/滚动位置保留）。重新输入搜索内容，返回按钮自动消失。
 - **PDF 左右滑动切歌**：侧边栏预览 PDF 时，从左往右滑（或鼠标拖拽）切到上一首，从右往左滑切到下一首；上下滚动阅读不受影响。
+- **长按定位后高亮目标诗歌**：长按跳转到分类位置后，被长按的那首诗歌在列表里高亮（强调左边框 + 一次性脉冲动画），与键盘选中的样式区分；点「返回」、重新输入搜索或切换分类后高亮自动清除。
+- **缺少资源时引导去 QQ 群下载（缺什么提示什么）**：仓库缺少诗歌 PDF 或缺少 MP3（任一缺失）时，启动后右上角弹出常驻提醒，按缺失情况精准提示（缺 PDF → 无法检索/预览；缺 MP3 → 无法播放），并指引加 QQ 群 1128049033 下载并解压到仓库任意位置（重启自动扫描全库）；弹窗含「复制群号」「取消」两按钮。设置页顶部也新增同样的说明与复制按钮。
+
+### 改进
+- **更新后自动清理回滚备份**：更新时旧版 main.js/manifest.json/styles.css 会备份为 .old；插件成功启动后自动清理，目录不再残留（新版本启动即失败则保留，回滚能力不受影响）。
 `,
   '1.0.2': `## [1.0.2] - 2026-10-16
 
@@ -2415,7 +2420,7 @@ class HymnsPlugin extends Plugin {
     this.addCommand({ id: 'open-hymns-view', name: '打开诗歌面板', callback: () => this.activateView() });
     this.addCommand({ id: 'rebuild-hymns-index', name: '重建诗歌（PDF/MP3）索引', callback: async () => {
       await this.buildIndex(); if (this.view) this.view.renderListMode();
-      if (!this.hymns.length && !this.mp3Count) this.showNoMediaNotice();
+      if (!this.hymns.length || !this.mp3Count) this.showNoMediaNotice();
       new Notice('诗歌索引已重建，共 ' + this.hymns.length + ' 首');
     } });
     this.addCommand({ id: 'rebuild-hymns-lyrics', name: '重建歌词索引', callback: async () => {
@@ -2425,20 +2430,17 @@ class HymnsPlugin extends Plugin {
     this.app.workspace.onLayoutReady(async () => {
       await this.buildIndex();
       await this.loadLyrics();
-      // 既没有 PDF 也没有 MP3：弹窗引导去 QQ 群下载（右上角常驻，含复制群号/取消）
-      if (!this.hymns.length && !this.mp3Count) {
-        this.showNoMediaNotice();
-      } else if (!this.hymns.length) {
-        // 仅有 MP3、没有 PDF：仍要明说，否则用户只会看到“空列表”而无从下手
-        new Notice('Hymns：没有扫描到任何诗歌 PDF。请到设置里把「PDF 文件夹」留空（扫描整个仓库），或用「自动检测」一键定位。', 12000);
-      } else {
-        // 有诗歌 PDF → 每次启动增量同步歌词索引（已建好的秒跳过；仅处理新增/缺失；0 新增时完全不打扰）。
-        // silent=true：仅当确有新 PDF 才弹进度/完成提示，避免每次启动刷屏；无变化则不重写 lyrics.json。
+      // 有 PDF → 每次启动增量同步歌词索引（已建好的秒跳过；silent=true 时 0 新增不打扰；无变化不重写 lyrics.json）
+      if (this.hymns.length) {
         try {
           await this.rebuildLyrics(false, true);
         } catch (e) {
           new Notice('自动同步歌词索引失败：' + (e && e.message ? e.message : e) + '。可到设置手动点“重建歌词索引”。', 10000);
         }
+      }
+      // 缺资源提醒：没有诗歌 PDF 或没有 MP3（两者任一缺失），都弹统一引导去 QQ 群下载
+      if (!this.hymns.length || !this.mp3Count) {
+        this.showNoMediaNotice();
       }
       if (this.view) this.view.renderListMode();
       // 插件已成功加载 → 上一轮更新留下的 .old 回滚备份已完成使命，清理掉，避免目录里堆一堆备份文件
@@ -3111,20 +3113,43 @@ class HymnsPlugin extends Plugin {
   /* 当用户既没有诗歌 PDF、也没有 MP3 时，在右上角弹出常驻提醒：
      告知需要到 QQ 群下载资源；提供「复制群号」与「取消」两个按钮。
      会话内只弹一次，避免 buildIndex 多次触发时刷屏。 */
+  /* 根据缺哪种资源生成对应的标题与正文（缺什么提示什么，并说明受影响的功
+     能）。PDF 决定检索/预览，MP3 决定播放。两者都缺则合并说明。 */
+  noMediaStatus() {
+    const noPdf = !this.hymns.length;
+    const noMp3 = !this.mp3Count;
+    let title, desc;
+    if (noPdf && noMp3) {
+      title = '📂 Hymns 需要诗歌 PDF 和 MP3';
+      desc = '本插件需要诗歌 PDF 和 MP3：缺 PDF 将无法使用诗歌检索与预览，缺 MP3 将无法播放。由于文件较大，请加 QQ 群 ' + QQ_GROUP_NUMBER +
+        ' 下载诗歌 PDF 和 MP3，下载好后请解压至 Obsidian 仓库中的任意位置，插件重启后会自动扫描全库。';
+    } else if (noPdf) {
+      title = '📂 Hymns 缺少诗歌 PDF';
+      desc = '缺少诗歌 PDF，将无法使用诗歌检索与预览功能。由于文件较大，请加 QQ 群 ' + QQ_GROUP_NUMBER +
+        ' 下载诗歌 PDF，下载好后请解压至 Obsidian 仓库中的任意位置，插件重启后会自动扫描全库。';
+    } else { // 仅缺 MP3
+      title = '📂 Hymns 缺少诗歌 MP3';
+      desc = '缺少诗歌 MP3，将无法使用播放功能。由于文件较大，请加 QQ 群 ' + QQ_GROUP_NUMBER +
+        ' 下载诗歌 MP3，下载好后请解压至 Obsidian 仓库中的任意位置，插件重启后会自动扫描全库。';
+    }
+    return { noPdf, noMp3, title, desc };
+  }
+
   showNoMediaNotice() {
     if (this._noMediaNoticeShown) return;
     this._noMediaNoticeShown = true;
 
+    const { title, desc } = this.noMediaStatus();
     const notice = new Notice('', 0); // timeout=0 → 常驻，直到用户操作
     const frag = document.createDocumentFragment();
     const wrap = document.createElement('div');
     wrap.style.padding = '6px 4px'; wrap.style.minWidth = '300px'; wrap.style.maxWidth = '380px';
     const titleEl = document.createElement('div');
     titleEl.style.cssText = 'font-weight:600;margin-bottom:6px;display:flex;align-items:center;gap:6px;';
-    titleEl.textContent = '📂 Hymns 需要诗歌 PDF 和 MP3';
+    titleEl.textContent = title;
     const descEl = document.createElement('div');
     descEl.style.cssText = 'font-size:12px;line-height:1.5;color:var(--text-muted);margin-bottom:10px;';
-    descEl.textContent = NO_MEDIA_TIP;
+    descEl.textContent = desc;
     const btnWrap = document.createElement('div');
     btnWrap.style.cssText = 'display:flex;gap:8px;align-items:center;';
     const copyBtn = document.createElement('button');
