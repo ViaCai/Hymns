@@ -23,6 +23,12 @@ const VIEW_TYPE_HYMNS = 'hymns-view';
    附录诗歌（Ds1 / C附3 / Q附15 等）不参与数字分页，全部放在特殊页码 “S”（永远排在最后）。 */
 const APPENDIX_PAGE = 'S';
 
+/* 资源分发：诗歌 PDF 与 MP3 体积较大，不随插件本体（GitHub）分发，
+   改由 QQ 群提供下载。两个入口（启动弹窗 / 设置页）共用这一常量，避免写死多处。 */
+const QQ_GROUP_NUMBER = '1128049033';
+const NO_MEDIA_TIP = '本插件需要诗歌 PDF 和 MP3。由于文件较大，请加 QQ 群 ' + QQ_GROUP_NUMBER +
+  ' 下载诗歌 PDF 和 MP3，下载好后请解压至 Obsidian 仓库中的任意位置，插件重启后会自动扫描全库。';
+
 /* ===== 侧边栏 PDF 预览的资源上限（防止 Obsidian 白屏）=====
    侧边栏是用 pdf.js 把 PDF 逐页画成 <canvas>。canvas 的内存（尤其 GPU 纹理）
    不会随 DOM 移除立刻回收，必须显式把 width/height 置 0，否则反复翻页会把显存
@@ -559,6 +565,12 @@ class HymnsSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
     containerEl.createEl('h2', { text: 'Hymns 诗歌插件设置' });
+
+    // 资源获取提醒：插件本体不含诗歌 PDF/MP3（体积大），需到 QQ 群下载后解压进仓库
+    new Setting(containerEl)
+      .setName('需要诗歌 PDF 和 MP3')
+      .setDesc(NO_MEDIA_TIP)
+      .addButton((b) => b.setButtonText('复制群号 ' + QQ_GROUP_NUMBER).setCta().onClick(() => copyText(QQ_GROUP_NUMBER)));
 
     // 顶部扫描状态：0 首时给出明确原因与一键修复，避免“静默失败”
     this.renderScanStatus(containerEl);
@@ -1314,6 +1326,7 @@ class HymnsView extends ItemView {
     this._pdfToken = 0;      // PDF 渲染令牌（翻页并发保护）
     this.isPlaying = false;
     this._jumpBack = null;   // 长按跳转的返回点：{query, catFilter, page, scrollTop}
+    this._jumpUid = null;    // 长按跳转后需要高亮显示的诗歌 uid
 
     const root = this.contentEl;
     root.empty();
@@ -1563,7 +1576,7 @@ class HymnsView extends ItemView {
   onQueryChanged() {
     this.query = this.searchEl.value || '';
     // 重新输入检索内容 → 丢弃长按跳转的返回点，返回按钮消失
-    if (this._jumpBack) { this._jumpBack = null; this.showBackBtn(false); }
+    if (this._jumpBack) { this._jumpBack = null; this._jumpUid = null; this.showBackBtn(false); }
     this.page = 0;
     this.selectedIndex = -1;
     this.renderList();
@@ -1592,6 +1605,8 @@ class HymnsView extends ItemView {
   setCat(cat) {
     this.catFilter = cat;
     this.updateCatBtn();
+    // 切换分类即视为离开长按跳转态：清返回点、清高亮、隐藏返回按钮
+    if (this._jumpBack) { this._jumpBack = null; this._jumpUid = null; this.showBackBtn(false); }
     this.page = 0;
     this.selectedIndex = -1;
     this.renderList();
@@ -1622,6 +1637,7 @@ class HymnsView extends ItemView {
     const pages = buildPages(list);
     const idx = pages.findIndex((pg) => pg.items.some((x) => x.uid === h.uid));
     this.page = idx >= 0 ? idx : 0;
+    this._jumpUid = h.uid;            // 记住要高亮的长按目标，renderItem 据此加高亮类
     this.showBackBtn(true);
     this.renderList();
     // 3) 滚动到目标诗歌（渲染完成后）
@@ -1637,6 +1653,7 @@ class HymnsView extends ItemView {
     const st = this._jumpBack;
     if (!st) return;
     this._jumpBack = null;
+    this._jumpUid = null;            // 清除长按高亮
     this.showBackBtn(false);
     this.query = st.query;
     this.searchEl.value = st.query;
@@ -1891,6 +1908,8 @@ class HymnsView extends ItemView {
     const el = document.createElement('div');
     el.classList.add('hymns-item');
     el.dataset.uid = h.uid;
+    // 长按跳转定位到分类后，被长按的那首诗歌在此处高亮（与键盘选中的 is-selected 区分）
+    if (this._jumpUid && this._jumpUid === h.uid) el.classList.add('hymns-jump-highlight');
 
     const badge = el.createSpan({ cls: 'hymns-badge', text: h.letter });
     badge.style.background = catInfo(h.letter).color;
@@ -2381,6 +2400,7 @@ class HymnsPlugin extends Plugin {
     this.recent = data.recent || [];
     this.ensureBuiltinPlaylists();   // 首次加载自动写入内置默认播放列表
     this.hymns = [];
+    this.mp3Count = 0;          // 全库 MP3 总数（buildIndex 填充）
     this.hymnByUid = new Map();
     this.groupByCode = new Map();
     this.lyrics = {};
@@ -2395,6 +2415,7 @@ class HymnsPlugin extends Plugin {
     this.addCommand({ id: 'open-hymns-view', name: '打开诗歌面板', callback: () => this.activateView() });
     this.addCommand({ id: 'rebuild-hymns-index', name: '重建诗歌（PDF/MP3）索引', callback: async () => {
       await this.buildIndex(); if (this.view) this.view.renderListMode();
+      if (!this.hymns.length && !this.mp3Count) this.showNoMediaNotice();
       new Notice('诗歌索引已重建，共 ' + this.hymns.length + ' 首');
     } });
     this.addCommand({ id: 'rebuild-hymns-lyrics', name: '重建歌词索引', callback: async () => {
@@ -2404,8 +2425,11 @@ class HymnsPlugin extends Plugin {
     this.app.workspace.onLayoutReady(async () => {
       await this.buildIndex();
       await this.loadLyrics();
-      if (!this.hymns.length) {
-        // 0 首必须明说，否则用户只会看到“空列表”而无从下手
+      // 既没有 PDF 也没有 MP3：弹窗引导去 QQ 群下载（右上角常驻，含复制群号/取消）
+      if (!this.hymns.length && !this.mp3Count) {
+        this.showNoMediaNotice();
+      } else if (!this.hymns.length) {
+        // 仅有 MP3、没有 PDF：仍要明说，否则用户只会看到“空列表”而无从下手
         new Notice('Hymns：没有扫描到任何诗歌 PDF。请到设置里把「PDF 文件夹」留空（扫描整个仓库），或用「自动检测」一键定位。', 12000);
       } else {
         // 有诗歌 PDF → 每次启动增量同步歌词索引（已建好的秒跳过；仅处理新增/缺失；0 新增时完全不打扰）。
@@ -2417,6 +2441,8 @@ class HymnsPlugin extends Plugin {
         }
       }
       if (this.view) this.view.renderListMode();
+      // 插件已成功加载 → 上一轮更新留下的 .old 回滚备份已完成使命，清理掉，避免目录里堆一堆备份文件
+      this.cleanOldBackups();
       // 启动后自动检测更新（每次启动都检查，仅受 settings.autoCheckUpdate 控制）
       this.onUpdateFlow();
     });
@@ -2781,6 +2807,7 @@ class HymnsPlugin extends Plugin {
     const mp3Root = normalize(this.settings.mp3Folder).toLowerCase();
     const groups = new Map();   // code -> [{ file, parsed, v }]
     const mp3ByCode = new Map(); // code -> [{ path, v }]
+    let mp3Total = 0;            // 全库扫描到的 MP3 文件总数（含未能配对的孤儿 MP3）
 
     for (const file of this.app.vault.getFiles()) {
       const p = normalize(file.path).toLowerCase();
@@ -2794,6 +2821,7 @@ class HymnsPlugin extends Plugin {
         if (!parsed) continue;
         if (!mp3ByCode.has(parsed.code)) mp3ByCode.set(parsed.code, []);
         mp3ByCode.get(parsed.code).push({ path: file.path, v: parseVariant(file.name) });
+        mp3Total++;
       }
     }
 
@@ -2845,6 +2873,7 @@ class HymnsPlugin extends Plugin {
     }
     this.dupGroups = dupGroups;
     this.noMp3List = noMp3;
+    this.mp3Count = mp3Total;     // 供“没有 PDF 也没有 MP3”时弹窗提醒使用
     this._indexBuilt = true;
   }
 
@@ -3079,6 +3108,39 @@ class HymnsPlugin extends Plugin {
     });
   }
 
+  /* 当用户既没有诗歌 PDF、也没有 MP3 时，在右上角弹出常驻提醒：
+     告知需要到 QQ 群下载资源；提供「复制群号」与「取消」两个按钮。
+     会话内只弹一次，避免 buildIndex 多次触发时刷屏。 */
+  showNoMediaNotice() {
+    if (this._noMediaNoticeShown) return;
+    this._noMediaNoticeShown = true;
+
+    const notice = new Notice('', 0); // timeout=0 → 常驻，直到用户操作
+    const frag = document.createDocumentFragment();
+    const wrap = document.createElement('div');
+    wrap.style.padding = '6px 4px'; wrap.style.minWidth = '300px'; wrap.style.maxWidth = '380px';
+    const titleEl = document.createElement('div');
+    titleEl.style.cssText = 'font-weight:600;margin-bottom:6px;display:flex;align-items:center;gap:6px;';
+    titleEl.textContent = '📂 Hymns 需要诗歌 PDF 和 MP3';
+    const descEl = document.createElement('div');
+    descEl.style.cssText = 'font-size:12px;line-height:1.5;color:var(--text-muted);margin-bottom:10px;';
+    descEl.textContent = NO_MEDIA_TIP;
+    const btnWrap = document.createElement('div');
+    btnWrap.style.cssText = 'display:flex;gap:8px;align-items:center;';
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'mod-cta'; copyBtn.textContent = '复制群号';
+    copyBtn.style.cssText = 'font-size:12px;padding:4px 12px;';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.textContent = '取消'; cancelBtn.style.cssText = 'font-size:12px;padding:4px 12px;';
+    btnWrap.appendChild(copyBtn); btnWrap.appendChild(cancelBtn);
+
+    wrap.appendChild(titleEl); wrap.appendChild(descEl); wrap.appendChild(btnWrap);
+    frag.appendChild(wrap); notice.setMessage(frag);
+
+    copyBtn.addEventListener('click', (e) => { e.stopPropagation(); copyText(QQ_GROUP_NUMBER); });
+    cancelBtn.addEventListener('click', (e) => { e.stopPropagation(); notice.hide(); });
+  }
+
   /* 下载并覆盖插件本体；覆盖前把旧文件备份为 .old，完成后提示重启并弹出更新说明 */
   async performUpdate(targetVersion) {
     const notice = new Notice('正在下载更新...', 0);
@@ -3120,6 +3182,25 @@ class HymnsPlugin extends Plugin {
       new Notice('更新失败：' + e.message, 8000);
       console.error('[Hymns] 更新失败:', e);
     }
+  }
+
+  /* 清理更新时留下的 *.old 回滚备份。
+     备份只在「覆盖新文件 → 重启生效」这段时间有价值：既然插件本次已成功加载
+     （onLayoutReady 走到了这里），说明新版本可用，备份就多余了。
+     若新版本加载即崩，onLayoutReady 根本不会执行，备份自然保留，回滚能力不受影响。
+     卸载/换机器残留的备份也会在下次启动时一并清掉。 */
+  async cleanOldBackups() {
+    try {
+      const dir = await this.getPluginRel();
+      if (!dir) return;
+      const adapter = this.app.vault.adapter;
+      for (const f of ['main.js.old', 'manifest.json.old', 'styles.css.old']) {
+        const p = dir + '/' + f;
+        try {
+          if (await adapter.exists(p)) { await adapter.remove(p); console.log('[Hymns] 已清理更新备份 ' + f); }
+        } catch (e) { /* 单个文件失败不影响其它 */ }
+      }
+    } catch (e) { console.warn('[Hymns] 清理更新备份失败:', e && e.message); }
   }
 
   /* 取得指定版本说明：内置 CHANGELOG_CONTENT → 远端 CHANGELOG.md 解析 */

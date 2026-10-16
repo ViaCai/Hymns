@@ -258,6 +258,19 @@ button.hymns-icon-btn.hymns-icon-btn.hymns-random-btn:hover { color: var(--inter
 .hymns-item:hover { background: var(--background-modifier-hover); }
 .hymns-item.is-selected { background: var(--background-modifier-active); border-color: var(--interactive-accent); }
 
+/* 长按跳转后高亮被长按的那首诗歌：强调左边框 + 轻微底色 + 一次性脉冲（与键盘选中的 is-selected 区分） */
+.hymns-item.hymns-jump-highlight {
+  border-color: var(--interactive-accent);
+  border-left-width: 4px;
+  background: var(--background-modifier-active);
+  box-shadow: inset 3px 0 0 0 var(--interactive-accent);
+  animation: hymns-jump-pulse 1.1s ease-out 1;
+}
+@keyframes hymns-jump-pulse {
+  0%   { background: var(--interactive-accent); opacity: 0.65; }
+  100% { background: var(--background-modifier-active); opacity: 1; }
+}
+
 /* 返回按钮（搜索框最右）：仅长按跳转后出现 */
 button.hymns-icon-btn.hymns-icon-btn.hymns-back-btn { color: var(--text-accent); }
 button.hymns-icon-btn.hymns-icon-btn.hymns-back-btn:hover { color: var(--text-accent-hover, var(--text-accent)); }
