@@ -1778,6 +1778,30 @@ class HymnsView extends ItemView {
       this.resultsEl.createDiv({ cls: 'hymns-empty', text: '未找到匹配的诗歌' });
       return;
     }
+
+    // 搜索模式：一次性展示全部命中结果，不再按“编号区间”分页。
+    // 此前搜索结果也被 buildPages 按编号区间拆散（D0xx 在页0、D3xx 在页3…），
+    // 用户只能看到当前区间的几条，看起来像“检索结果不全”。
+    if (this.query.trim()) {
+      if (this.countEl) this.countEl.setText('· 命中 ' + list.length + ' 首');
+      this.pageKeys = [];
+      this.page = 0;
+      this.selectedIndex = -1;
+      // 渲染上限：防止“的/我”这类泛词命中上千首导致界面卡顿
+      const MAX_RENDER = 500;
+      const shown = list.slice(0, MAX_RENDER);
+      this.visibleItems = shown.map((h) => {
+        const el = this.renderItem(h);
+        this.resultsEl.appendChild(el);
+        return { el, hymn: h };
+      });
+      if (list.length > MAX_RENDER) {
+        this.resultsEl.createDiv({ cls: 'hymns-empty', text: '命中 ' + list.length + ' 首，仅显示前 ' + MAX_RENDER + ' 首，请补充关键词缩小范围' });
+      }
+      this.renderPager(1, list.length);
+      if (!keepScroll) this.resultsEl.scrollTop = 0;
+      return;
+    }
     // 按“编号区间”分页：页码 0 = 编号 0-99，1 = 100-199 …，附录统一进页码 S。
     // 每个页码显示哪些诗歌只取决于编号，与列表长短无关。
     const pages = buildPages(list);
