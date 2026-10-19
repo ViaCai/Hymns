@@ -413,6 +413,8 @@ button.hymns-icon-btn.hymns-icon-btn svg {
 
 /* 查看模式（侧边栏内用 pdf.js 渲染到 canvas） */
 .hymns-viewerwrap { padding: 0; }
+/* 查看器容器只为接收键盘（P 键投影）而可聚焦，不要显示焦点框 */
+.hymns-viewerwrap:focus, .hymns-viewerwrap:focus-visible { outline: none; box-shadow: none; }
 .hymns-viewer-toolbar {
   display: flex; align-items: center; gap: 4px;
   padding: 6px 8px;
@@ -595,3 +597,165 @@ button.hymns-icon-btn.hymns-pl-del:hover { color: var(--text-error); background:
 }
 .hymns-empty-guide-title { font-weight: 700; margin-bottom: 4px; }
 .hymns-empty-guide button { margin-top: 8px; }
+
+
+/* ============ 诗歌投影（窗口内可拖动 / 整屏全屏 / 单页） ============
+   页面用 JS 等比缩放（取宽/高较小的比例）铺进可用区域，另一边自然留黑边；
+   底部播放条展开时从可用高度里扣掉它的高度，页面重新排版，播放条不盖字。 */
+.hymns-proj {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;          /* 盖住 Obsidian 的弹窗/侧栏 */
+  background: #000;
+  overflow: hidden;
+  outline: none;
+  cursor: default;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+  will-change: transform;
+}
+.hymns-proj.is-idle { cursor: none; }
+.hymns-proj-stage {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden;
+}
+.hymns-proj-stage canvas { display: block; background: #fff; }
+
+/* 加载 / 出错提示 */
+.hymns-proj .hymns-proj-tip {
+  position: absolute; left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  max-width: 78%;
+  color: rgba(255, 255, 255, .72);
+  font-size: 15px;
+  line-height: 1.7;
+  text-align: center;
+  pointer-events: none;
+}
+.hymns-proj .hymns-proj-tip:empty { display: none; }
+
+/* 顶部把手：窗口模式下按住可拖动投影面板；双击复位（整屏时隐藏） */
+.hymns-proj .hymns-proj-grip {
+  position: absolute; top: 0; left: 0; right: 0;
+  height: 26px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: grab;
+  color: rgba(255, 255, 255, .3);
+  background: linear-gradient(to bottom, rgba(255, 255, 255, .07), rgba(255, 255, 255, 0));
+  transition: color .15s;
+}
+.hymns-proj .hymns-proj-grip:hover { color: rgba(255, 255, 255, .65); }
+.hymns-proj.is-dragging .hymns-proj-grip { cursor: grabbing; color: rgba(255, 255, 255, .75); }
+.hymns-proj .hymns-proj-grip svg { width: 26px; height: 26px; }
+.hymns-proj.is-fullscreen .hymns-proj-grip { display: none; }
+
+/* 右上角工具：播放 / 全屏 / 退出 */
+.hymns-proj .hymns-proj-tools {
+  position: absolute; top: 32px; right: 14px;
+  display: flex; align-items: center; gap: 8px;
+  transition: opacity .25s;
+}
+.hymns-proj.is-fullscreen .hymns-proj-tools { top: 14px; }
+.hymns-proj button.hymns-proj-btn {
+  width: 40px; height: 40px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  border: none; border-radius: 50%;
+  background: rgba(255, 255, 255, .10);
+  color: rgba(255, 255, 255, .82);
+  box-shadow: none;
+  cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.hymns-proj button.hymns-proj-btn:hover { background: rgba(255, 255, 255, .22); color: #fff; }
+.hymns-proj button.hymns-proj-btn svg { width: 20px; height: 20px; }
+
+/* 翻页：左右两侧的大按钮（触屏也好点） */
+.hymns-proj button.hymns-proj-nav {
+  position: absolute; top: 50%;
+  transform: translateY(-50%);
+  width: 64px; height: 96px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  border: none; border-radius: 8px;
+  background: rgba(255, 255, 255, .06);
+  color: rgba(255, 255, 255, .55);
+  box-shadow: none;
+  cursor: pointer;
+  transition: opacity .25s, background .15s, color .15s;
+}
+.hymns-proj button.hymns-proj-nav:hover { background: rgba(255, 255, 255, .16); color: #fff; }
+.hymns-proj button.hymns-proj-nav svg { width: 28px; height: 28px; }
+.hymns-proj button.hymns-proj-nav.is-prev { left: 10px; }
+.hymns-proj button.hymns-proj-nav.is-next { right: 10px; }
+.hymns-proj button.hymns-proj-nav:disabled { opacity: .18; cursor: default; background: rgba(255, 255, 255, .04); }
+.hymns-proj.is-single button.hymns-proj-nav { display: none; }   /* 只有一页：不显示翻页 */
+
+/* 底部信息条：诗歌名 / 操作提示 / 页码（播放条展开时让位） */
+.hymns-proj .hymns-proj-bar {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  height: 44px;
+  display: flex; align-items: center; gap: 12px;
+  padding: 0 18px;
+  color: rgba(255, 255, 255, .55);
+  font-size: 13px;
+  background: linear-gradient(to top, rgba(0, 0, 0, .62), rgba(0, 0, 0, 0));
+  pointer-events: none;
+  transition: opacity .25s;
+}
+.hymns-proj .hymns-proj-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hymns-proj .hymns-proj-hint { flex: 0 0 auto; opacity: .75; }
+.hymns-proj .hymns-proj-page { flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+.hymns-proj.has-playbar .hymns-proj-bar { display: none; }
+
+/* 播放条：▶/⏸ + 诗歌名 + 进度 + 时间 + 页码 + 收起 */
+.hymns-proj .hymns-proj-playbar {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  height: 56px;
+  box-sizing: border-box;
+  display: flex; align-items: center; gap: 10px;
+  padding: 0 16px;
+  background: rgba(0, 0, 0, .78);
+  border-top: 1px solid rgba(255, 255, 255, .10);
+  color: rgba(255, 255, 255, .82);
+  font-size: 13px;
+}
+.hymns-proj button.hymns-proj-pb-btn {
+  flex: 0 0 auto;
+  width: 34px; height: 34px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  border: none; border-radius: 50%;
+  background: rgba(255, 255, 255, .12);
+  color: rgba(255, 255, 255, .9);
+  box-shadow: none;
+  cursor: pointer;
+}
+.hymns-proj button.hymns-proj-pb-btn:hover { background: rgba(255, 255, 255, .24); color: #fff; }
+.hymns-proj button.hymns-proj-pb-btn svg { width: 18px; height: 18px; }
+.hymns-proj .hymns-proj-pb-title {
+  flex: 0 1 auto; max-width: 26%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.hymns-proj input.hymns-proj-pb-seek {
+  flex: 1 1 auto; min-width: 80px;
+  height: 4px; margin: 0; padding: 0;
+  border: none; border-radius: 2px;
+  background: rgba(255, 255, 255, .2);
+  accent-color: rgba(255, 255, 255, .9);
+  box-shadow: none;
+  cursor: pointer;
+}
+.hymns-proj .hymns-proj-pb-time { flex: 0 0 auto; font-variant-numeric: tabular-nums; opacity: .8; }
+.hymns-proj .hymns-proj-pb-page { flex: 0 0 auto; opacity: .6; font-variant-numeric: tabular-nums; }
+
+/* 无操作 3 秒后隐藏控件与信息条（播放条常驻，方便随时暂停/拖进度） */
+.hymns-proj.is-idle button.hymns-proj-btn,
+.hymns-proj.is-idle button.hymns-proj-nav,
+.hymns-proj.is-idle .hymns-proj-bar,
+.hymns-proj.is-idle .hymns-proj-tools { opacity: 0; pointer-events: none; }
+
+@media (max-width: 640px) {
+  .hymns-proj .hymns-proj-hint { display: none; }
+  .hymns-proj .hymns-proj-pb-title { max-width: 40%; }
+  .hymns-proj button.hymns-proj-nav { width: 44px; height: 120px; background: rgba(255, 255, 255, .05); }
+}

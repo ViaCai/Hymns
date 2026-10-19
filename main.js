@@ -13,7 +13,7 @@
  */
 const {
   Plugin, PluginSettingTab, Setting, ItemView, Notice,
-  TFile, Modal, Menu, setIcon, FuzzySuggestModal, requestUrl
+  TFile, Modal, Menu, setIcon, FuzzySuggestModal, requestUrl, Platform
 } = require('obsidian');
 
 const VIEW_TYPE_HYMNS = 'hymns-view';
@@ -37,6 +37,11 @@ const NO_MEDIA_TIP = '本插件需要诗歌 PDF 和 MP3。由于文件较大，�
    一旦被点开就会一次性读进内存并画满 canvas —— 所以必须同时限制体积与页数。 */
 const PDF_PREVIEW_MAX_PAGES = 10;                  // 单次最多画多少页
 const PDF_PREVIEW_MAX_BYTES = 20 * 1024 * 1024;    // 超过 20MB 不读进内存，直接交给系统阅读器
+/* 投影只画当前一页，内存占用与页数无关，因此上限可以放宽；
+   超过这条线基本是「整编本合集」这类超大文件，读进内存本身就有风险。 */
+const PDF_PROJECTION_MAX_BYTES = 120 * 1024 * 1024;
+/* 投影底部播放条的高度：展开时从可用高度里扣掉，页面重新排版，播放条不会盖住 PDF */
+const PROJ_PLAYBAR_H = 56;
 /* 某首诗歌所属的页码键：附录 → "S"；其余 → 编号除以 100 取整 */
 function pageKeyOf(h) {
   if (!h) return '0';
@@ -110,56 +115,74 @@ const UPDATE_BASE = 'https://raw.githubusercontent.com/' + UPDATE_REPO + '/' + U
 
 // ==================== 更新日志内容（供弹窗离线展示；缺失时回退到远端 CHANGELOG.md）====================
 const CHANGELOG_CONTENT = {
+  '1.0.7': `## [1.0.7] - 2026-10-20
+
+### 本次更新
+- **儿童诗歌、新歌颂咏现在也能看到歌名了**
+  以前这类诗歌的文件名只有一个编号（比如 E001），歌名只印在 PDF 里面，列表里就只剩一个光秃秃的编号。现在插件会把歌名读出来，显示成「E001 神说要有光」，直接搜歌名也能找到它。
+- 顺手去掉了歌名末尾多出来的一两个引号。
+
+### 小提示
+- 特会诗歌大多是扫描件（相当于一张图片），里面没有文字，读不出歌名，暂时还是显示分类名。
+
+---`,
+  '1.0.6': `## [1.0.6] - 2026-10-20
+
+### 本次更新
+- **修好了附录诗歌「放错歌」的问题**
+  有些附录诗歌（比如 Ds1、Q附1）以前点播放放的是别的歌，有的干脆没声音。现在每首都能对上自己的伴奏了。一共修好了 22 首，另外 11 首以前没声音的诗歌现在也能放了。
+
+---`,
+  '1.0.5': `## [1.0.5] - 2026-10-19
+
+### 本次更新
+- **新增「诗歌投影」，方便投屏大家一起唱**
+  - **怎么打开**：在诗歌右边的「⋯」菜单里点「诗歌投影」；或者侧边栏预览时直接按 \`P\`
+  - **翻页**：点屏幕左右两边的箭头，也可以用方向键、鼠标滚轮，触屏左右滑动
+  - **放伴奏**：点右上角 ▶ 或按**空格键**，底部会出现播放条，可以暂停、拖进度；播放条会自己让开位置，不会挡住歌词
+  - **放大到整屏**：按 \`O\` 键（或点全屏按钮），再按 \`O\` 或 \`Esc\` 退回
+  - **退出**：按 \`Esc\`，或点右上角 ✕
+  - **画面不会变形**：一屏只显示一页，多余的地方留黑边，字永远不会被裁掉
+  - 默认只占满 Obsidian 窗口，按住顶部那条可以拖动投影位置（双击回到原位）
+
+---`,
   '1.0.4': `## [1.0.4] - 2026-10-18
 
-### 修复
-- **修复「检索结果看起来不全」**：搜索结果此前也按「编号区间」分页（页码 0 = 编号 0-99、1 = 100-199…），命中结果被拆散到各个区间页，用户只能看到当前页的那几条。实测关键词「肉体」在歌词里命中 61 首、「认识」命中 69 首，界面上却只显示落在当前编号页的几首，容易被误认为检索漏结果。
+### 本次更新
+- **修好了「搜索结果看着不全」的问题**
+  以前搜一个词，结果被拆散在好几页里，只能看到当前页那几条。现在一次列出全部结果，顶部还会告诉你「命中 N 首」。
+- 输入「的」「我」这种太常见的字时，最多显示 500 首，以免卡顿。
 
-### 改进
-- **搜索模式一次性展示全部命中**：输入关键词后不再按编号区间分页，直接列出全部命中诗歌，翻页栏自动隐藏；浏览模式（点分类卡片浏览）仍保留原来的编号区间分页，行为不变。
-- **顶部显示命中数量**：搜索时列表顶部的计数改为「命中 N 首」，一眼可知共有多少结果。
-- **泛词保护**：命中超过 500 首时只渲染前 500 首并提示补充关键词，避免输入「的」「我」这类泛词造成卡顿。
-`,
+---`,
   '1.0.3': `## [1.0.3] - 2026-10-16
 
-### 新增
-- **长按定位（搜索结果 → 分类位置）**：在搜索结果里长按一首诗歌，直接跳到它所在分类的位置；搜索框右侧出现「返回」按钮，点击回到原搜索界面（搜索词/页码/滚动位置保留）。重新输入搜索内容，返回按钮自动消失。
-- **PDF 左右滑动切歌**：侧边栏预览 PDF 时，从左往右滑（或鼠标拖拽）切到上一首，从右往左滑切到下一首；上下滚动阅读不受影响。
-- **长按定位后高亮目标诗歌**：长按跳转到分类位置后，被长按的那首诗歌在列表里高亮（强调左边框 + 一次性脉冲动画），与键盘选中的样式区分；点「返回」、重新输入搜索或切换分类后高亮自动清除。
-- **缺少资源时引导去 QQ 群下载（缺什么提示什么）**：仓库缺少诗歌 PDF 或缺少 MP3（任一缺失）时，启动后右上角弹出常驻提醒，按缺失情况精准提示（缺 PDF → 无法检索/预览；缺 MP3 → 无法播放），并指引加 QQ 群 1128049033 下载并解压到仓库任意位置（重启自动扫描全库）；弹窗含「复制群号」「取消」两按钮。设置页顶部也新增同样的说明与复制按钮。
+### 本次更新
+- 搜索结果里长按一首诗歌，可以直接跳到它在分类里的位置，看完点「返回」还能回到搜索结果
+- 侧边栏预览 PDF 时，左右滑动就能切到上一首 / 下一首
+- 跳转过去的那首诗歌会高亮一下，一眼就能找到
+- 仓库里缺 PDF 或缺 MP3 时，会提醒你到 QQ 群（1128049033）下载，缺什么就提示什么
 
-### 改进
-- **更新后自动清理回滚备份**：更新时旧版 main.js/manifest.json/styles.css 会备份为 .old；插件成功启动后自动清理，目录不再残留（新版本启动即失败则保留，回滚能力不受影响）。
-`,
+---`,
   '1.0.2': `## [1.0.2] - 2026-10-16
 
-### 修复
-- **修复「检查更新失败：this.saveSettings is not a function」**：更新流程（手动「立即检查更新」与启动时自动检查）调用了未定义的方法 \`saveSettings\`，导致检查在联网前即中断，桌面端与移动端（iOS / iPadOS / Android）均无法检查与自动更新。现已补齐该方法，并让节流时间戳的保存失败不再阻断后续的联网比对。
-- **修复后即可全平台自动更新**：Windows、macOS、Linux、Android、iOS、iPadOS 上，启动时会自动比对云端版本，检测到新版本即弹出更新提示框。
+### 本次更新
+- 修好了「检查更新失败」的问题，现在每次打开 Obsidian 都会自动检查一次新版本，有新版本就在右上角提醒你
+- 更新完成后会自动清理旧版本的备份文件，不留垃圾
 
-### 改进
-- **自动更新改为「每次启动都检查」**：取消原来的 12 小时节流，每次启动 Obsidian 都会拉取云端版本比对一次（同一会话内 5 秒去抖，避免重复联网）。
-- **更新通知固定显示在右上角**：检测到新版本时在右上角弹出常驻通知，含「立即更新 / 查看详情 / 不再提醒」；点击通知正文或「查看详情」可打开更新说明。
-  - 不再因此前点过「稍后」而静默跳过，只要检测到新版本就会提示（会话内同版本只弹一次）。
-  - 「不再提醒」会记住版本；在设置里重新打开「自动检查更新」即可重置。
-`,
+---`,
   '1.0.1': `## [1.0.1] - 2026-10-16
 
-### 修复
-- **修复「只安装三个文件时无法建立歌词索引 / 预览 PDF」**：插件现已把 PDF.js 解析库（v3.11.174）内联进 main.js。此前从 GitHub 下载或从官方市场安装时只会得到 main.js / styles.css / manifest.json，插件目录没有 lib/，重建歌词索引会报「pdf.js 未能加载」；现在无需任何额外文件即可使用 PDF 预览与歌词索引。
-- **通过 Obsidian 官方审核**：补齐 LICENSE（MIT）；manifest 描述改为英文并以句点结尾；清除样式表中全部 !important；README 增补英文安装与使用说明。
+### 本次更新
+- 修好了只装三个文件时「无法预览 PDF、无法建立歌词索引」的问题，现在装上就能用，不需要额外文件
+- 插件已通过 Obsidian 官方审核
 
-### 说明
-- 若插件目录仍保留 lib/pdf.min.js（手动完整安装 / BRAT），会优先使用它；缺失时自动改用内置副本，两者行为一致。
-`,
+---`,
   '1.0.0': `## [1.0.0] - 2026-10-16
 
-### 新增
-- **诗歌浏览 / 搜索 / 播放与收藏插件首次发布**：按编号（如 D116）或关键词（空格分隔，如 恩典 耶稣）实时搜索，侧边栏预览 PDF，播放 MP3，收藏与播放列表。桌面端与移动端通用。
-- **内置默认播放列表**：自带 7 个主题歌单（倪柝声 / 李常受 / 余洁麟 / 和受恩 / 霍华德 / 以撒·华滋 / 约翰·牛顿），首次加载自动写入，不覆盖你的自定义歌单。
-- **自动检测更新**：每次启动 Obsidian 时拉取云端 manifest 比对版本；发现新版本在右上角弹出通知，提供「立即更新 / 查看详情 / 不再提醒」。更新成功后自动弹出更新说明，并可查看历史更新内容。
-- **播放列表管理增强**：删除改为图标按钮并二次确认；支持多选 / 全选批量删除；列表可上下排序；点击列表名直接打开明细；歌曲明细同样支持多选批量删除。
-`
+### 首次发布
+- 可以按编号（如 D116）或关键词（如 恩典 耶稣）搜索诗歌，侧边栏预览 PDF，播放 MP3，收藏和建歌单
+- 自带 7 个主题歌单，不会覆盖你自己的歌单
+- 每次打开 Obsidian 自动检查更新`,
 };
 
 /* ============ 工具函数 ============ */
@@ -179,19 +202,52 @@ function parsePdfCode(name) {
   const m = name.match(/^([DBECXQTO])(s|附)?(\d+)/i);
   if (!m) return null;
   const letter = m[1].toUpperCase();
-  const marker = (m[2] || '').toLowerCase();
+  const marker = (m[2] || '').toLowerCase();   // '' | 's' | '附'（附录标记，保留原写法）
   const appendix = marker === 's' || marker === '附';
   const num = parseInt(m[3], 10);
-  const display = letter + (appendix ? (marker === 's' ? 's' : '附') : '') + (appendix ? num : pad(num));
-  return { letter, appendix, num, code: display };
+  // 附录编号不补零（Ds1 / C附2），正歌编号补零到三位（D001 / Q001）
+  const code = letter + (appendix ? marker : '') + (appendix ? String(num) : pad(num));
+  return { letter, marker, appendix, num, code };
 }
-function parseMp3Code(name) {
-  const m = name.match(/^([dbecxqto])(s?)-?(\d+)/i);
+
+/* ---- MP3 命名 → 编号 ----
+   正歌：d001.mp3 → D001
+   附录：d-1.mp3  → Ds1 / D附1（横杠在字母与数字之间，短歌、补充诗歌）
+   版本：d388-2.mp3 → D388 的第 2 版（横杠在数字之后，属于同一个编号）
+   注意 d-1 与 d001 是两个不同的编号：前者配 Ds1，后者配 D001。
+   附录到底写成 s 还是「附」由 PDF 一侧决定（本仓库里 D 用 s、C/Q 用「附」），
+   所以这里只提取命名特征，真正归类交给 buildIndex 结合真实 PDF 编号来定。 */
+function parseMp3Raw(name) {
+  const m = String(name || '').match(/^([dbecxqto])(s?)(-?)(\d+)/i);
   if (!m) return null;
-  const letter = m[1].toUpperCase();
-  const appendix = m[2].toLowerCase() === 's';
-  const num = parseInt(m[3], 10);
-  return { letter, appendix, num, code: letter + (appendix ? 's' : '') + pad(num) };
+  return {
+    letter: m[1].toUpperCase(),
+    sMark: (m[2] || '').toLowerCase() === 's',   // ds1.mp3
+    dash: m[3] === '-',                          // d-1.mp3（附录）或 d388-2.mp3 里的前半段无关
+    num: parseInt(m[4], 10),
+  };
+}
+/* 由命名特征算出编号。ctx 可选：{ style: Map<letter,'s'|'附'>, appendix: Set<code> } */
+function mp3Code(raw, ctx) {
+  const L = raw.letter, n = raw.num, plain = L + pad(n);
+  if (raw.sMark) return L + 's' + String(n);
+  if (raw.dash) {
+    const candS = L + 's' + String(n), candF = L + '附' + String(n);
+    if (ctx && ctx.appendix) {
+      if (ctx.appendix.has(candS)) return candS;   // 优先命中真实存在的附录 PDF
+      if (ctx.appendix.has(candF)) return candF;
+    }
+    const st = ctx && ctx.style ? ctx.style.get(L) : '';
+    if (st) return L + st + String(n);
+    return plain;                                  // 没有对应附录 PDF，退回普通编号（旧行为）
+  }
+  return plain;
+}
+/* 独立解析（设置页统计 / 文件夹自动检测用，只需知道“能不能识别”） */
+function parseMp3Code(name) {
+  const raw = parseMp3Raw(name);
+  if (!raw) return null;
+  return { letter: raw.letter, appendix: raw.sMark || raw.dash, num: raw.num, code: mp3Code(raw, null) };
 }
 
 /* ---- 版本标记（variant）与唯一标识（uid）----
@@ -274,6 +330,19 @@ function extractTitle(name) {
   const base = name.replace(/\.pdf$/i, '').trim();
   const m = base.match(/^[A-Za-z](s|附)?\d+\.?(.*)$/);
   return m ? collapseCJKSpaces(m[2] || '') : '';
+}
+
+/* 标题清洗：PDF 坐标重建会把孤立的引号/标点挤成一行又并回上一行，
+   于是从正文抽出的标题可能带个尾巴（如「神说要有光“”」）。这里剥掉结尾多余的
+   引号与标点；只有剥掉后仍留有中文才认可，避免把纯标点标题洗成空串。 */
+function cleanIndexTitle(s) {
+  let t = String(s || '').replace(/\s+/g, ' ').trim();
+  if (!t) return '';
+  let t2 = trimStrayPunct(t);
+  let prev;
+  do { prev = t2; t2 = t2.replace(/[\s“”"'‘’《》〈〉「」『』（）()\[\]{}]+$/, ''); } while (t2 !== prev);
+  t2 = trimStrayPunct(t2.trim());
+  return /[\u3400-\u4dbf\u4e00-\u9fff]/.test(t2) ? t2 : t;
 }
 function isDashMp3(p) { return /-[^/]*\.mp3$/i.test(p); }
 
@@ -556,7 +625,9 @@ function buildSections(lines) {
 function assembleLyrics(pages, fileName) {
   let title = fileName ? extractTitle(fileName) : '';
   const firstLine = (pages.length && pages[0].length) ? pages[0][0].text : '';
-  if (!title) title = firstLine;
+  // 文件名里没有歌名（儿童诗歌 E / 新歌颂咏 X 等）时，用 PDF 正文第一行作标题；
+  // 正文抽出来的标题尾巴上可能挂着孤立标点，清洗后再存。
+  if (!title) title = cleanIndexTitle(firstLine);
   const tKey = title ? normKey(title) : '';
   const hKey = firstLine ? normKey(firstLine) : '';
   const lines = [];
@@ -1314,6 +1385,519 @@ class LyricsModal extends Modal {
   onClose() { this.contentEl.empty(); }
 }
 
+/* ============ 诗歌投影（单页投影：窗口内可拖动 / 整屏全屏） ============
+   会众唱诗时把诗歌页投到大屏：一个屏幕只放一页 PDF。
+   · 翻页：左右按钮、方向键 / PageUp / PageDown、鼠标滚轮、触屏左右滑动
+   · 播放：右上角 ▶ 或空格键 —— 打开底部播放条并播放这首诗歌的 MP3；
+           播放条会占用页面下方空间（而不是盖在页面上），绝不挡住 PDF 的字
+   · 全屏：默认只占满 Obsidian 窗口（顶部把手可按住拖动位置 / 双击复位）；
+           桌面端按 O 或点 ⛶ 扩大到整块屏幕，再按 O / Esc 退出整屏
+   · 退出：Esc（非全屏时直接退出投影）或右上角 ✕
+   适配规则：页面按「等比缩放取小」铺进可用区域——区域偏宽就适应高度（左右留黑边），
+   区域偏高就适应宽度（上下留黑边），任何窗口比例下都不会裁切、不会超出界面。 */
+class HymnProjection {
+  constructor(app, plugin, hymn, doc, view) {
+    this.app = app;
+    this.plugin = plugin;
+    this.hymn = hymn;
+    this.view = view || null;                 // 复用侧边栏的音频元素，保证音量/状态一致
+    // 用发起投影的那个窗口的 document，兼容 Obsidian 的弹出窗口
+    this.docEl = doc || document;
+    this.win = this.docEl.defaultView || window;
+    this.isDesktop = !!(typeof Platform !== 'undefined' && Platform && Platform.isDesktop) ||
+      !!(this.app && this.app.isMobile === false);
+    this.pdfDoc = null;
+    this.pageNo = 1;
+    this.total = 1;
+    this.onClose = null;
+    this._canvas = null;
+    this._token = 0;
+    this._closed = false;
+    this._idleTimer = null;
+    this._resizeTimer = null;
+    this._fullscreen = false;
+    this._pos = { x: 0, y: 0 };
+    this._playbarOpen = false;
+    this._seeking = false;
+    this._lastPlaying = null;
+    this._wheelAcc = 0;
+    this._wheelAt = 0;
+    this._audioEl = null;
+    this._onKeyDown = (e) => this.handleKey(e);
+    this._onResize = () => this.scheduleFit();
+    this._onFsChange = () => this.onFullscreenChange();
+    this._onAudio = () => this.syncPlayState();
+  }
+
+  open() {
+    if (this.el) return;
+    const d = this.docEl;
+    const el = d.createElement('div');
+    el.className = 'hymns-proj';
+    el.tabIndex = -1;
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-label', '诗歌投影');
+    this.el = el;
+
+    this.stageEl = el.createDiv({ cls: 'hymns-proj-stage' });
+    this.tipEl = el.createDiv({ cls: 'hymns-proj-tip', text: '正在打开投影…' });
+
+    // 顶部把手：窗口模式下按住可拖动投影面板；双击回到铺满窗口
+    this.gripEl = el.createDiv({ cls: 'hymns-proj-grip', attr: { title: '按住拖动投影窗口，双击复位' } });
+    setIcon(this.gripEl.createSpan({ cls: 'hymns-proj-grip-icon' }), 'grip-horizontal');
+    this.bindDrag();
+
+    // 右上角：播放 / 全屏（桌面端）/ 退出
+    this.toolsEl = el.createDiv({ cls: 'hymns-proj-tools' });
+    this.playBtn = this.toolsEl.createEl('button', { cls: 'hymns-proj-btn', attr: { 'aria-label': '播放（空格）', title: '播放（空格）' } });
+    setIcon(this.playBtn, 'play');
+    this.playBtn.addEventListener('click', () => this.togglePlay());
+    if (this.isDesktop) {
+      this.fsBtn = this.toolsEl.createEl('button', { cls: 'hymns-proj-btn', attr: { 'aria-label': '全屏投影（O）', title: '全屏投影（O）' } });
+      setIcon(this.fsBtn, 'maximize');
+      this.fsBtn.addEventListener('click', () => this.toggleFullscreen());
+    }
+    this.closeBtn = this.toolsEl.createEl('button', { cls: 'hymns-proj-btn', attr: { 'aria-label': '退出投影（Esc）', title: '退出投影（Esc）' } });
+    setIcon(this.closeBtn, 'x');
+    this.closeBtn.addEventListener('click', () => this.close());
+
+    this.prevBtn = el.createEl('button', { cls: 'hymns-proj-nav is-prev', attr: { 'aria-label': '上一页（←）', title: '上一页（← / 滚轮上）' } });
+    setIcon(this.prevBtn, 'chevron-left');
+    this.prevBtn.addEventListener('click', () => this.step(-1));
+
+    this.nextBtn = el.createEl('button', { cls: 'hymns-proj-nav is-next', attr: { 'aria-label': '下一页（→）', title: '下一页（→ / 滚轮下）' } });
+    setIcon(this.nextBtn, 'chevron-right');
+    this.nextBtn.addEventListener('click', () => this.step(1));
+
+    // 底部信息条：诗歌名 / 操作提示 / 页码
+    this.barEl = el.createDiv({ cls: 'hymns-proj-bar' });
+    this.titleEl = this.barEl.createSpan({ cls: 'hymns-proj-title', text: hymnLabel(this.hymn) });
+    const hint = '← → / 滚轮 翻页 · 空格 播放' + (this.isDesktop ? ' · O 全屏' : '') + ' · Esc 退出';
+    this.barEl.createSpan({ cls: 'hymns-proj-hint', text: hint });
+    this.pageEl = this.barEl.createSpan({ cls: 'hymns-proj-page', text: '' });
+
+    // 播放条：默认收起；展开时页面让出下方空间，播放条不会盖住 PDF
+    this.playbarEl = el.createDiv({ cls: 'hymns-proj-playbar' });
+    this.playbarEl.style.display = 'none';
+    this.buildPlaybar();
+
+    this.bindSwipe();
+    this.bindWheel();
+    el.addEventListener('pointermove', () => this.wake());
+    el.addEventListener('pointerdown', () => this.wake());
+
+    d.body.appendChild(el);
+    d.addEventListener('keydown', this._onKeyDown, true);
+    this.win.addEventListener('resize', this._onResize);
+    d.addEventListener('fullscreenchange', this._onFsChange);
+    this.bindAudio();
+
+    this.wake();
+    this.updateChrome();
+    this.syncPlayState();
+    try { el.focus({ preventScroll: true }); } catch (e) { /* ignore */ }
+    this.load();
+  }
+
+  /* 底部播放条：▶/⏸ + 诗歌名 + 进度 + 时间 + 页码 + 收起 */
+  buildPlaybar() {
+    const bar = this.playbarEl;
+    this.barPlayBtn = bar.createEl('button', { cls: 'hymns-proj-pb-btn', attr: { 'aria-label': '播放 / 暂停', title: '播放 / 暂停（空格）' } });
+    setIcon(this.barPlayBtn, 'play');
+    this.barPlayBtn.addEventListener('click', () => this.togglePlay());
+
+    this.pbTitleEl = bar.createSpan({ cls: 'hymns-proj-pb-title', text: hymnLabel(this.hymn) });
+
+    this.seekEl = bar.createEl('input', { cls: 'hymns-proj-pb-seek', attr: { type: 'range', min: '0', max: '100', step: '1', value: '0' } });
+    this.seekEl.addEventListener('input', () => {
+      this._seeking = true;
+      const a = this._audioEl;
+      this.timeEl.setText(fmtTime(this.seekEl.value) + ' / ' + ((a && a.duration) ? fmtTime(a.duration) : '--:--'));
+    });
+    this.seekEl.addEventListener('change', () => {
+      this._seeking = false;
+      if (this._audioEl) { try { this._audioEl.currentTime = Number(this.seekEl.value); } catch (e) { /* ignore */ } }
+    });
+
+    this.timeEl = bar.createSpan({ cls: 'hymns-proj-pb-time', text: '--:-- / --:--' });
+    this.pbPageEl = bar.createSpan({ cls: 'hymns-proj-pb-page', text: '' });
+    const hide = bar.createEl('button', { cls: 'hymns-proj-pb-btn', attr: { 'aria-label': '收起播放条', title: '收起播放条' } });
+    setIcon(hide, 'chevron-down');
+    hide.addEventListener('click', () => this.closePlayBar());
+  }
+
+  /* 读取并打开 PDF；整个过程都在投影层内提示，不打断侧边栏 */
+  async load() {
+    const h = this.hymn;
+    const path = (h && h.pdfPath) ? String(h.pdfPath) : '';
+    if (!path) { this.showTip('该诗歌没有可用的 PDF 路径，无法投影'); return; }
+    let file = null;
+    try { file = this.app.vault.getAbstractFileByPath(path); } catch (e) { file = null; }
+    if (!(file instanceof TFile)) { this.showTip('未找到 PDF：' + path); return; }
+    const size = (file.stat && file.stat.size) || 0;
+    if (size > PDF_PROJECTION_MAX_BYTES) {
+      this.showTip('该 PDF 较大（' + (size / 1048576).toFixed(1) + ' MB），已跳过投影；请先单独拆分这首诗歌的 PDF。');
+      return;
+    }
+
+    let buf = null;
+    try { buf = await this.app.vault.readBinary(path); }
+    catch (e) { try { buf = await this.app.vault.adapter.readBinary(path); } catch (e2) { buf = null; } }
+    if (this._closed) return;
+    if (!buf) { this.showTip('PDF 读取失败：' + path); return; }
+
+    let lib = null;
+    try { lib = await this.plugin.ensurePdfLib(); }
+    catch (e) { this.showTip('PDF 引擎加载失败：' + ((e && e.message) || e)); return; }
+    if (this._closed) return;
+
+    this.showTip('正在打开投影…');
+    try {
+      const doc = await lib.getDocument({ data: new Uint8Array(buf), isEvalSupported: false }).promise;
+      if (this._closed) { try { doc.destroy(); } catch (e) { /* ignore */ } return; }
+      this.pdfDoc = doc;
+      this.total = Math.max(1, Number(doc.numPages) || 1);
+      this.pageNo = 1;
+      this.updateChrome();
+      await this.renderPage(1);
+    } catch (e) {
+      if (this._closed) return;
+      console.error('[Hymns] 投影打开 PDF 失败', path, e);
+      this.showTip('PDF 打开失败：' + ((e && e.message) || e));
+    }
+  }
+
+  /* 页面适配：scale 取「宽比」与「高比」中较小的一个 ⇒ 整页一定装得下，
+     多出来的方向自然留黑边（区域宽 → 左右黑边；区域高 → 上下黑边）。
+     播放条展开时从可用高度里扣掉它的高度，页面重新排版，绝不被盖住。 */
+  fitViewport(page) {
+    const stage = this.stageEl;
+    const docEl = this.docEl.documentElement;
+    const availW = Math.max(1, stage.clientWidth || (docEl && docEl.clientWidth) || 1);
+    let availH = Math.max(1, stage.clientHeight || (docEl && docEl.clientHeight) || 1);
+    if (this._playbarOpen) availH = Math.max(1, availH - PROJ_PLAYBAR_H);
+    const base = page.getViewport({ scale: 1 });
+    const scale = Math.min(availW / base.width, availH / base.height);
+    return page.getViewport({ scale: Math.max(0.05, scale) });
+  }
+
+  async renderPage(n) {
+    if (!this.pdfDoc || this._closed) return;
+    const token = (this._token = (this._token || 0) + 1);
+    try {
+      const page = await this.pdfDoc.getPage(n);
+      if (token !== this._token || this._closed) { try { page.cleanup(); } catch (e) { /* ignore */ } return; }
+      const vp = this.fitViewport(page);
+      // 高清屏按 dpr 放大画布，保证投到大屏时字仍然锐利（上限 2，避免超大画布占显存）
+      const dpr = Math.min((this.win.devicePixelRatio || 1), 2);
+      const canvas = this.docEl.createElement('canvas');
+      canvas.width = Math.max(1, Math.floor(vp.width * dpr));
+      canvas.height = Math.max(1, Math.floor(vp.height * dpr));
+      canvas.style.width = Math.round(vp.width) + 'px';
+      canvas.style.height = Math.round(vp.height) + 'px';
+      const ctx = canvas.getContext('2d', { alpha: false });
+      await page.render({
+        canvasContext: ctx,
+        viewport: vp,
+        transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null,
+      }).promise;
+      try { page.cleanup(); } catch (e) { /* ignore */ }
+      if (token !== this._token || this._closed) { this.releaseCanvas(canvas); return; }
+      const old = this._canvas;
+      this._canvas = canvas;
+      this.stageEl.appendChild(canvas);
+      if (old && old !== canvas) this.releaseCanvas(old);
+      this.showTip('');
+    } catch (e) {
+      if (token !== this._token || this._closed) return;
+      console.error('[Hymns] 投影渲染失败', this.hymn && this.hymn.pdfPath, e);
+      this.showTip('PDF 渲染失败：' + ((e && e.message) || e));
+    }
+  }
+
+  /* canvas 必须先显式把宽高置 0 再移除，否则 GPU 纹理要等 GC 才回收 */
+  releaseCanvas(c) {
+    try { c.width = 0; c.height = 0; } catch (e) { /* ignore */ }
+    try { c.remove(); } catch (e) { /* ignore */ }
+  }
+
+  step(dir) {
+    if (dir === 0) return;
+    const n = this.pageNo + dir;
+    if (n < 1 || n > this.total) return;
+    this.pageNo = n;
+    this.updateChrome();
+    this.wake();
+    this.renderPage(n);
+  }
+
+  gotoPage(n) {
+    const t = Math.min(this.total, Math.max(1, n));
+    if (t === this.pageNo) return;
+    this.pageNo = t;
+    this.updateChrome();
+    this.wake();
+    this.renderPage(t);
+  }
+
+  updateChrome() {
+    if (!this.el) return;
+    this.el.classList.toggle('is-single', this.total <= 1);
+    const txt = this.pageNo + ' / ' + this.total;
+    if (this.pageEl) this.pageEl.setText(txt);
+    if (this.pbPageEl) this.pbPageEl.setText(txt);
+    if (this.prevBtn) this.prevBtn.disabled = this.pageNo <= 1;
+    if (this.nextBtn) this.nextBtn.disabled = this.pageNo >= this.total;
+  }
+
+  showTip(text) {
+    if (!this.tipEl) return;
+    this.tipEl.setText(text || '');
+  }
+
+  /* 操作提示条：3 秒无操作自动淡出，鼠标一动就回来 */
+  wake() {
+    if (this._closed || !this.el) return;
+    this.el.classList.remove('is-idle');
+    clearTimeout(this._idleTimer);
+    this._idleTimer = setTimeout(() => {
+      if (!this._closed && this.el) this.el.classList.add('is-idle');
+    }, 3000);
+  }
+
+  /* ---- 翻页手势：触屏左右滑动 ---- */
+  bindSwipe() {
+    let start = null;
+    this.stageEl.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      start = { id: e.pointerId, x: e.clientX, y: e.clientY };
+    });
+    this.stageEl.addEventListener('pointerup', (e) => {
+      const s = start; start = null;
+      if (!s || e.pointerId !== s.id) return;
+      const dx = e.clientX - s.x, dy = e.clientY - s.y;
+      if (Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy)) return;
+      this.step(dx > 0 ? -1 : 1);        // 左划 → 下一页；右划 → 上一页
+    });
+    this.stageEl.addEventListener('pointercancel', () => { start = null; });
+  }
+
+  /* ---- 翻页：鼠标滚轮 / 触控板滚动（下=下一页，上=上一页） ---- */
+  bindWheel() {
+    this.el.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });
+  }
+  onWheel(e) {
+    if (this._closed) return;
+    // 作用在播放条上的滚动交给控件自己处理
+    if (this.playbarEl && e.target && this.playbarEl.contains(e.target)) return;
+    e.preventDefault();
+    this.wake();
+    const now = Date.now();
+    const d = e.deltaY || 0;
+    // 触控板惯性会连发很多事件：累积到阈值才翻一页，且 260ms 内不重复翻
+    this._wheelAcc = (this._wheelAt && now - this._wheelAt < 500) ? (this._wheelAcc + d) : d;
+    if (Math.abs(this._wheelAcc) < 30) return;
+    if (this._wheelAt && now - this._wheelAt < 260) { this._wheelAcc = 0; return; }
+    const dir = this._wheelAcc > 0 ? 1 : -1;
+    this._wheelAcc = 0;
+    this._wheelAt = now;
+    this.step(dir);
+  }
+
+  handleKey(e) {
+    if (this._closed || e.isComposing) return;
+    const k = e.key;
+    if (k === 'Escape') {
+      e.preventDefault(); e.stopPropagation();
+      // 全屏时 Esc 只退出整屏；非全屏时才真正关掉投影
+      if (this._fullscreen) this.toggleFullscreen(); else this.close();
+      return;
+    }
+    if (k === 'o' || k === 'O') {
+      if (!this.isDesktop) return;
+      e.preventDefault(); e.stopPropagation(); this.toggleFullscreen(); return;
+    }
+    if (k === ' ' || k === 'Spacebar') {
+      e.preventDefault(); e.stopPropagation(); this.togglePlay(); return;
+    }
+    if (k === 'Home') { e.preventDefault(); e.stopPropagation(); this.gotoPage(1); return; }
+    if (k === 'End') { e.preventDefault(); e.stopPropagation(); this.gotoPage(this.total); return; }
+    let dir = 0;
+    if (k === 'ArrowLeft' || k === 'PageUp' || k === 'ArrowUp') dir = -1;
+    else if (k === 'ArrowRight' || k === 'PageDown' || k === 'ArrowDown') dir = 1;
+    if (!dir) return;
+    e.preventDefault();
+    e.stopPropagation();
+    this.step(dir);
+  }
+
+  /* ---- 窗口模式：顶部把手拖动位置 ---- */
+  bindDrag() {
+    const grip = this.gripEl;
+    let s = null;
+    grip.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      s = { id: e.pointerId, x: e.clientX, y: e.clientY, ox: this._pos.x, oy: this._pos.y };
+      try { grip.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+      this.el.classList.add('is-dragging');
+      this.wake();
+      e.preventDefault();
+    });
+    grip.addEventListener('pointermove', (e) => {
+      if (!s || e.pointerId !== s.id) return;
+      this.setPos(s.ox + (e.clientX - s.x), s.oy + (e.clientY - s.y));
+    });
+    const end = (e) => {
+      if (s && e.pointerId === s.id) { s = null; this.el.classList.remove('is-dragging'); }
+    };
+    grip.addEventListener('pointerup', end);
+    grip.addEventListener('pointercancel', end);
+    grip.addEventListener('dblclick', () => this.setPos(0, 0));   // 双击恢复铺满窗口
+  }
+  setPos(x, y) {
+    if (!this.el) return;
+    const w = this.el.clientWidth || 1, h = this.el.clientHeight || 1;
+    // 至少留 140px 在窗口内，避免整个被拖出去找不回来
+    const mx = Math.max(40, w - 140), my = Math.max(40, h - 140);
+    this._pos.x = Math.max(-mx, Math.min(mx, x));
+    this._pos.y = Math.max(-my, Math.min(my, y));
+    this.el.style.transform = 'translate(' + this._pos.x + 'px,' + this._pos.y + 'px)';
+  }
+
+  /* ---- 全屏（桌面端）：O 键 / ⛶ 按钮，再按 O / Esc 退出整屏 ---- */
+  toggleFullscreen() {
+    const el = this.el;
+    if (!el || this._closed) return;
+    if (this._fullscreen) {
+      try { if (this.docEl.fullscreenElement) this.docEl.exitFullscreen(); } catch (e) { /* ignore */ }
+      return;
+    }
+    if (typeof el.requestFullscreen !== 'function') { new Notice('当前环境不支持整屏投影'); return; }
+    try {
+      const p = el.requestFullscreen({ navigationUI: 'hide' });
+      if (p && typeof p.then === 'function') p.then(() => this.onFullscreenChange()).catch(() => { /* ignore */ });
+    } catch (e) { /* ignore */ }
+  }
+  onFullscreenChange() {
+    if (this._closed || !this.el) return;
+    const on = !!this.docEl.fullscreenElement;
+    if (on === this._fullscreen) return;
+    this._fullscreen = on;
+    this.el.classList.toggle('is-fullscreen', on);
+    if (on) this.setPos(0, 0);                 // 整屏时不需要偏移
+    const icon = on ? 'minimize' : 'maximize';
+    if (this.fsBtn) {
+      setIcon(this.fsBtn, icon);
+      this.fsBtn.setAttribute('aria-label', on ? '退出全屏（O）' : '全屏投影（O）');
+      this.fsBtn.setAttribute('title', on ? '退出全屏（O）' : '全屏投影（O）');
+    }
+    this.renderPage(this.pageNo);
+    this.wake();
+  }
+
+  /* ---- 播放：复用侧边栏的音频元素 ---- */
+  bindAudio() {
+    const a = this.view && this.view.audioEl;
+    if (!a) return;
+    this._audioEl = a;
+    ['play', 'pause', 'ended', 'timeupdate', 'loadedmetadata', 'emptied'].forEach((ev) => {
+      a.addEventListener(ev, this._onAudio);
+    });
+  }
+  unbindAudio() {
+    const a = this._audioEl;
+    if (!a) return;
+    ['play', 'pause', 'ended', 'timeupdate', 'loadedmetadata', 'emptied'].forEach((ev) => {
+      a.removeEventListener(ev, this._onAudio);
+    });
+    this._audioEl = null;
+  }
+  togglePlay() {
+    if (!this.hymn) return;
+    if (!this.hymn.mp3Path) { new Notice('该诗歌暂无 MP3'); return; }
+    this.openPlayBar();
+    if (this.view && typeof this.view.toggleForProjection === 'function') this.view.toggleForProjection(this.hymn);
+    this.syncPlayState();
+  }
+  openPlayBar() {
+    if (this._playbarOpen || !this.el) return;
+    this._playbarOpen = true;
+    this.el.classList.add('has-playbar');
+    if (this.playbarEl) this.playbarEl.style.display = '';
+    this.wake();
+    this.renderPage(this.pageNo);      // 让出底部空间后重新排版，页面不会被播放条盖住
+  }
+  closePlayBar() {
+    if (!this._playbarOpen || !this.el) return;
+    this._playbarOpen = false;
+    this.el.classList.remove('has-playbar');
+    if (this.playbarEl) this.playbarEl.style.display = 'none';
+    this.renderPage(this.pageNo);
+  }
+  syncPlayState() {
+    const a = this._audioEl;
+    const mine = !!(a && this.view && this.view.activeHymn && this.view.activeHymn.uid === this.hymn.uid);
+    const playing = !!(a && !a.paused && !a.ended && mine);
+    if (playing !== this._lastPlaying) {
+      this._lastPlaying = playing;
+      const icon = playing ? 'pause' : 'play';
+      if (this.playBtn) { setIcon(this.playBtn, icon); this.playBtn.setAttribute('aria-label', playing ? '暂停（空格）' : '播放（空格）'); }
+      if (this.barPlayBtn) { setIcon(this.barPlayBtn, icon); this.barPlayBtn.setAttribute('aria-label', playing ? '暂停' : '播放'); }
+    }
+    if (!a || !mine) {
+      if (this.timeEl) this.timeEl.setText('--:-- / --:--');
+      return;
+    }
+    const d = (isFinite(a.duration) && a.duration > 0) ? a.duration : 0;
+    const t = a.currentTime || 0;
+    if (this.seekEl) {
+      this.seekEl.max = String(Math.max(1, Math.round(d)));
+      if (!this._seeking) this.seekEl.value = String(Math.round(t));
+    }
+    if (this.timeEl) this.timeEl.setText(fmtTime(t) + ' / ' + (d ? fmtTime(d) : '--:--'));
+  }
+
+  /* 窗口尺寸变化（含进入/退出全屏）：重新按新比例排版当前页 */
+  scheduleFit() {
+    if (this._closed) return;
+    clearTimeout(this._resizeTimer);
+    this._resizeTimer = setTimeout(() => {
+      if (!this._closed && this.pdfDoc) this.renderPage(this.pageNo);
+    }, 180);
+  }
+
+  close() {
+    if (this._closed) return;
+    this._closed = true;
+    const d = this.docEl;
+    try { d.removeEventListener('keydown', this._onKeyDown, true); } catch (e) { /* ignore */ }
+    try { d.removeEventListener('fullscreenchange', this._onFsChange); } catch (e) { /* ignore */ }
+    try { this.win.removeEventListener('resize', this._onResize); } catch (e) { /* ignore */ }
+    clearTimeout(this._idleTimer);
+    clearTimeout(this._resizeTimer);
+    this.unbindAudio();
+    if (this._fullscreen || d.fullscreenElement === this.el) {
+      try { if (d.fullscreenElement) d.exitFullscreen(); } catch (e) { /* ignore */ }
+      this._fullscreen = false;
+    }
+    if (this._canvas) { this.releaseCanvas(this._canvas); this._canvas = null; }
+    if (this.pdfDoc) {
+      try { if (this.pdfDoc.loadingTask && this.pdfDoc.loadingTask.destroy) this.pdfDoc.loadingTask.destroy(); } catch (e) { /* ignore */ }
+      try { this.pdfDoc.destroy(); } catch (e) { /* ignore */ }
+      this.pdfDoc = null;
+    }
+    if (this.el && this.el.parentNode) this.el.remove();
+    this.el = null;
+    if (typeof this.onClose === 'function') { try { this.onClose(); } catch (e) { /* ignore */ } }
+  }
+}
+
+/* 秒 → m:ss */
+function fmtTime(sec) {
+  const s = Math.max(0, Math.floor(Number(sec) || 0));
+  return String(Math.floor(s / 60)) + ':' + String(s % 60).padStart(2, '0');
+}
+
 /* ============ 主视图（侧边栏） ============ */
 class HymnsView extends ItemView {
   constructor(leaf, plugin) { super(leaf); this.plugin = plugin; plugin.view = this; }
@@ -1339,6 +1923,7 @@ class HymnsView extends ItemView {
     this._audioToken = 0;    // 音频读取令牌（切歌并发保护）
     this._pdfDoc = null;
     this._pdfToken = 0;      // PDF 渲染令牌（翻页并发保护）
+    this._projection = null; // 当前打开的投影窗口（同一时间只允许一个）
     this.isPlaying = false;
     this._jumpBack = null;   // 长按跳转的返回点：{query, catFilter, page, scrollTop}
     this._jumpUid = null;    // 长按跳转后需要高亮显示的诗歌 uid
@@ -1409,6 +1994,15 @@ class HymnsView extends ItemView {
     this.viewerActions = this.viewerWrap.createDiv({ cls: 'hymns-viewer-actions' });
     this.bindViewerSwipe();
 
+    // 查看器容器可聚焦：点一下 PDF 区域，随后的键盘输入都落在这个视图里，
+    // 这样按 P 才能稳定唤起投影（同时避免在笔记/搜索框里打字母 p 时误触发）。
+    this.viewerWrap.setAttribute('tabindex', '-1');
+    this.viewerBody.addEventListener('pointerdown', () => {
+      try { this.viewerWrap.focus({ preventScroll: true }); } catch (e) { /* ignore */ }
+    });
+    // P 键 = 投影当前正在预览的这首诗歌（仅在预览模式下、且焦点在本视图内时生效）
+    this.registerDomEvent(this.containerEl.ownerDocument, 'keydown', (e) => this.onProjectionHotkey(e), true);
+
     // 播放栏（固定）
     this.buildPlayer(root);
 
@@ -1433,6 +2027,60 @@ class HymnsView extends ItemView {
     this.openInViewer(h);
   }
 
+  /* ---- 诗歌投影 ----
+     会众唱诗时把一首诗歌投到大屏：一个屏幕一页 PDF，左右翻页，Esc / ✕ 退出。
+     入口有三处：列表与查看器的「更多」菜单、预览时按 P。 */
+  openProjection(h) {
+    const hymn = h || this.viewHymn;
+    if (!hymn) { new Notice('请先打开一首诗歌再投影'); return; }
+    if (!hymn.pdfPath) { new Notice('该诗歌暂无 PDF，无法投影'); return; }
+    if (this._projection) { try { this._projection.close(); } catch (e) { /* ignore */ } this._projection = null; }
+    const p = new HymnProjection(this.app, this.plugin, hymn, this.containerEl.ownerDocument, this);
+    p.onClose = () => {
+      if (this._projection === p) this._projection = null;
+      // 退出投影后把焦点还给预览区，方便立刻再按 P
+      if (this.mode === 'viewer') { try { this.viewerWrap.focus({ preventScroll: true }); } catch (e) { /* ignore */ } }
+    };
+    this._projection = p;
+    p.open();
+  }
+
+  /* ---- 给投影用的播放控制 ----
+     复用侧边栏那个音频元素（音量、播放状态与播放器一致），不改动播放列表：
+     投影里按空格/▶ 只是把这首诗歌的 MP3 播起来，翻歌仍然走原来的播放栏逻辑。 */
+  async playForProjection(h) {
+    if (!h || !h.mp3Path) return;
+    const list = (this.currentList && this.currentList.length) ? this.currentList : this.hymns.slice();
+    const i = list.findIndex((x) => x.uid === h.uid);
+    if (i >= 0) { this.activeIndex = i; this.activeHymn = h; }   // 让播放栏上/下一首能顺着往下走
+    await this.playHymn(h);
+  }
+  toggleForProjection(h) {
+    if (!h || !h.mp3Path) { new Notice('该诗歌暂无 MP3'); return; }
+    const a = this.audioEl;
+    const same = this.activeHymn && this.activeHymn.uid === h.uid;
+    if (same && a) {
+      if (!a.paused) { a.pause(); return; }
+      if (a.src) { a.play(); return; }
+    }
+    this.playForProjection(h);
+  }
+
+  /* 预览模式下按 P 投影当前诗歌。
+     只在焦点确实落在本视图内时才响应——否则用户在笔记里打字母 p 也会弹投影。 */
+  onProjectionHotkey(e) {
+    if (e.defaultPrevented || e.isComposing) return;
+    if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+    if (e.key !== 'p' && e.key !== 'P') return;
+    if (this.mode !== 'viewer' || !this.viewHymn) return;
+    const t = e.target;
+    if (!t || !this.containerEl.contains(t)) return;
+    if (t.closest && t.closest('input, textarea, select, [contenteditable="true"]')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    this.openProjection(this.viewHymn);
+  }
+
   async onClose() {
     this.closeDropdown();
     this._audioToken = (this._audioToken || 0) + 1;        // 作废在途的音频读取
@@ -1441,6 +2089,7 @@ class HymnsView extends ItemView {
     // 关闭视图前必须释放 PDF 资源（画布 + 文档），否则显存/内存会残留
     this.disposePdfDoc();
     this.disposePdfCanvases();
+    if (this._projection) { try { this._projection.close(); } catch (e) { /* ignore */ } this._projection = null; }
     this.contentEl.empty();
   }
 
@@ -2056,9 +2705,12 @@ class HymnsView extends ItemView {
       .join(' … ');
   }
 
-  /* 复制菜单（列表与查看器的“更多”按钮共用）：仅保留 4 个复制项 */
+  /* 复制菜单（列表与查看器的“更多”按钮共用）：投影 + 4 个复制项 */
   showCopyMenu(h, evt) {
     const menu = new Menu();
+    // 投影放最上面并与复制项分隔：唱诗时最常用的动作
+    menu.addItem((i) => i.setTitle('诗歌投影').setIcon('presentation').onClick(() => this.openProjection(h)));
+    menu.addSeparator();
     menu.addItem((i) => i.setTitle('复制 PDF 链接').onClick(() => copyText('[[' + linkBase(h.pdfPath) + ']]')));
     menu.addItem((i) => i.setTitle('复制 PDF 嵌入').onClick(() => copyText('![[' + embedBase(h.pdfPath) + ']]')));
     if (h.mp3Path) {
@@ -2080,6 +2732,8 @@ class HymnsView extends ItemView {
     this.listWrap.style.display = 'none';
     this.viewerWrap.style.display = '';
     this.renderViewer();
+    // 焦点交给查看器：刚点进来的用户随后按 P 就能直接投影
+    try { this.viewerWrap.focus({ preventScroll: true }); } catch (e) { /* ignore */ }
     this.autoPlayIfEnabled(h);          // 设置里打开后，查看 PDF 即自动播放其音频
   }
   closeViewer() { this.renderListMode(true); }
@@ -2464,6 +3118,7 @@ class HymnsPlugin extends Plugin {
     this.app.workspace.onLayoutReady(async () => {
       await this.buildIndex();
       await this.loadLyrics();
+      this.applyLyricsTitles();   // E/X 等文件名无歌名的，用歌词索引里的标题补齐
       // 有 PDF → 每次启动增量同步歌词索引（已建好的秒跳过；silent=true 时 0 新增不打扰；无变化不重写 lyrics.json）
       if (this.hymns.length) {
         try {
@@ -2486,6 +3141,7 @@ class HymnsPlugin extends Plugin {
 
   onunload() {
     if (this.view && this.view._audioUrl) URL.revokeObjectURL(this.view._audioUrl);
+    if (this.view && this.view._projection) { try { this.view._projection.close(); } catch (e) { /* ignore */ } }
   }
 
   allData() {
@@ -2547,6 +3203,24 @@ class HymnsPlugin extends Plugin {
   }
   /* key 为诗歌唯一标识 uid（= 编号，或 编号#版本标注） */
   getLyrics(id) { const e = this.lyrics[id]; return e ? (e.lyrics || '') : ''; }
+
+  /* 用歌词索引里「从 PDF 正文抽出的标题」补齐文件名里没有歌名的诗歌。
+     儿童诗歌（E）、新歌颂咏（X）等 PDF 只叫 E001 / X001，标题只印在 PDF 内文里，
+     歌词索引已把它们抽进 title 字段，这里回填到诗歌条目上：
+     列表、搜索（标题也参与匹配）、歌词页、投影标题栏就都能显示歌名了。
+     文件名自带标题的诗歌不受影响，永远以文件名为准。 */
+  applyLyricsTitles() {
+    const ly = this.lyrics || {};
+    if (!this.hymns.length || !Object.keys(ly).length) return 0;
+    let n = 0;
+    for (const h of this.hymns) {
+      if (h.title) continue;
+      const e = ly[h.uid];
+      const t = cleanIndexTitle(e && e.title);
+      if (t) { h.title = t; n++; }
+    }
+    return n;
+  }
 
   /* pdf.js 加载：在“隔离作用域”中执行 UMD，绝不写入 window.pdfjsLib / globalThis.pdfjsWorker。
      ⚠️ 关键：Obsidian 自带 PDF 查看器依赖 window.pdfjsLib（其内部 workerSrc=/lib/pdfjs/pdf.worker.min.mjs）。
@@ -2694,6 +3368,7 @@ class HymnsPlugin extends Plugin {
       const added = Object.keys(result).length - baseCount;
       const changed = added > 0 || empty > 0 || failed > 0;
       this.lyrics = result;
+      this.applyLyricsTitles();   // 新抽出的标题立刻回填到列表
       // 静默且无变化：避免每次启动都重写 3.8MB 的 lyrics.json（Obsidian Sync / 备份用户尤需避免）
       if (!silent || changed) {
         await this.app.vault.adapter.write(rel + '/lyrics.json', JSON.stringify(result));
@@ -2843,6 +3518,7 @@ class HymnsPlugin extends Plugin {
     const mp3Root = normalize(this.settings.mp3Folder).toLowerCase();
     const groups = new Map();   // code -> [{ file, parsed, v }]
     const mp3ByCode = new Map(); // code -> [{ path, v }]
+    const mp3Raw = [];           // 先只记 MP3 的命名特征，等 PDF 编号收齐后再归类
     let mp3Total = 0;            // 全库扫描到的 MP3 文件总数（含未能配对的孤儿 MP3）
 
     for (const file of this.app.vault.getFiles()) {
@@ -2853,12 +3529,40 @@ class HymnsPlugin extends Plugin {
         if (!groups.has(parsed.code)) groups.set(parsed.code, []);
         groups.get(parsed.code).push({ file, parsed, v: parseVariant(file.name) });
       } else if (p.endsWith('.mp3') && inFolder(p, mp3Root)) {
-        const parsed = parseMp3Code(file.name);
-        if (!parsed) continue;
-        if (!mp3ByCode.has(parsed.code)) mp3ByCode.set(parsed.code, []);
-        mp3ByCode.get(parsed.code).push({ path: file.path, v: parseVariant(file.name) });
+        const raw = parseMp3Raw(file.name);
+        if (!raw) continue;
+        mp3Raw.push({ file, raw });
         mp3Total++;
       }
+    }
+
+    /* 附录编号的实际写法：D 用 s（Ds1），C/Q 用「附」（C附2、Q附1）。
+       带横杠的 MP3（d-1、q-1、c-2）据此归到对应的附录编号，不再抢 d001 / q001 / c002。 */
+    const appendixStyle = new Map();   // letter -> 's' | '附'
+    const appendixCodes = new Set();   // 真实存在的附录编号
+    for (const [code, items] of groups) {
+      if (items[0].parsed.appendix) {
+        appendixStyle.set(items[0].parsed.letter, items[0].parsed.marker);
+        appendixCodes.add(code);
+      }
+    }
+    const nameOf = (it) => it.file.name;
+    // 第一轮：正歌（无横杠）先占位，保证 d001.mp3 一定归 D001
+    for (const it of mp3Raw) {
+      if (it.raw.sMark || it.raw.dash) continue;
+      const code = mp3Code(it.raw, null);
+      if (!mp3ByCode.has(code)) mp3ByCode.set(code, []);
+      mp3ByCode.get(code).push({ path: it.file.path, v: parseVariant(nameOf(it)) });
+    }
+    // 第二轮：附录 MP3（ds1 / d-1 / q-1 / c-2 …）
+    const ctx = { style: appendixStyle, appendix: appendixCodes };
+    for (const it of mp3Raw) {
+      if (!(it.raw.sMark || it.raw.dash)) continue;
+      const code = mp3Code(it.raw, ctx);
+      // 找不到对应附录 PDF 时才退回普通编号，且不能挤掉已经有正歌 MP3 的编号
+      if (!appendixCodes.has(code) && (mp3ByCode.has(code) || !groups.has(code))) continue;
+      if (!mp3ByCode.has(code)) mp3ByCode.set(code, []);
+      mp3ByCode.get(code).push({ path: it.file.path, v: parseVariant(nameOf(it)) });
     }
 
     const hymns = [];
@@ -2910,6 +3614,8 @@ class HymnsPlugin extends Plugin {
     this.dupGroups = dupGroups;
     this.noMp3List = noMp3;
     this.mp3Count = mp3Total;     // 供“没有 PDF 也没有 MP3”时弹窗提醒使用
+    // 歌词索引已加载时顺手回填标题（E/X 这类文件名不带歌名的靠它才有名字）
+    this.applyLyricsTitles();
     this._indexBuilt = true;
   }
 
