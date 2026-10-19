@@ -1,7 +1,7 @@
 {
   "id": "hymns",
   "name": "Hymns",
-  "version": "1.0.7",
+  "version": "1.0.5",
   "minAppVersion": "0.15.0",
   "description": "Browse, search, play and bookmark hymns: instant search by number (e.g. D116) or keywords, PDF preview, MP3 playback, favourites and playlists. Works on desktop and mobile.",
   "author": "ViaCai",
