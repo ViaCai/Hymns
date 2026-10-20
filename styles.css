@@ -599,7 +599,7 @@ button.hymns-icon-btn.hymns-pl-del:hover { color: var(--text-error); background:
 .hymns-empty-guide button { margin-top: 8px; }
 
 
-/* ============ 诗歌投影（窗口内可拖动 / 整屏全屏 / 单页） ============
+/* ============ 窗口投影（窗口内可拖动 / 整屏全屏 / 单页） ============
    页面用 JS 等比缩放（取宽/高较小的比例）铺进可用区域，另一边自然留黑边；
    底部播放条展开时从可用高度里扣掉它的高度，页面重新排版，播放条不盖字。 */
 .hymns-proj {
