@@ -444,8 +444,9 @@ button.hymns-icon-btn.hymns-icon-btn svg {
   display: flex; align-items: center; gap: 4px;
   padding: 6px 8px;
   border-top: 1px solid var(--background-modifier-border);
+  flex-wrap: wrap;            /* 侧边栏较窄时按钮自动换行，避免被面板裁切 */
 }
-.hymns-viewer-actions .hymns-icon-btn { width: 30px; height: 30px; }
+.hymns-viewer-actions .hymns-icon-btn { width: 30px; height: 30px; flex-shrink: 0; }
 
 /* 播放栏（固定） */
 .hymns-player {
@@ -454,7 +455,7 @@ button.hymns-icon-btn.hymns-icon-btn svg {
   background: var(--background-secondary);
   flex: 0 0 auto;
 }
-.hymns-player-row { display: flex; align-items: center; gap: 6px; }
+.hymns-player-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; } /* 窄侧边栏自动换行，按钮不被裁 */
 /* 播放栏第一行：当前播放的歌曲名 */
 .hymns-now {
   display: block;
