@@ -242,6 +242,18 @@ button.hymns-icon-btn.hymns-icon-btn.hymns-random-btn:hover { color: var(--inter
 .hymns-collapsible-caret svg { width: 16px; height: 16px; }
 .hymns-collapsible-body { padding: 4px 6px; }
 
+/* 播放列表里的单个歌单：嵌套折叠块，比顶层区块紧凑并缩进一点体现层级。
+   去掉自身的边框，避免“框里套框”显得杂乱，只保留悬停高亮。 */
+.hymns-playlist-wrap { margin: 2px 0; border: none; }
+.hymns-playlist-wrap .hymns-collapsible-head { background: transparent; padding: 6px; }
+.hymns-playlist-wrap .hymns-collapsible-title {
+  font-weight: 500;
+  /* 歌单名可能很长（如「倪柝声 Watchman Nee 1903-1972（16 首）」）：
+     允许换行，窄侧边栏下也不会被裁掉 */
+  min-width: 0; word-break: break-word;
+}
+.hymns-playlist-wrap .hymns-collapsible-body { padding: 2px 2px 2px 14px; }
+
 .hymns-item {
   display: flex;
   align-items: center;

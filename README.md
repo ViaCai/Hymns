@@ -14,6 +14,10 @@
 - **收藏与播放列表**：收藏诗歌；内置 7 个主题歌单（倪柝声 / 李常受 / 余洁麟 / 和受恩 / 霍华德 / 以撒·华滋 / 约翰·牛顿），也可自建歌单。
 - **联动**：可在底部播放栏「联动」里勾选 MP3 随 PDF 切换以及 PDF 随 MP3 切换。
 - **复制链接或嵌入笔记**：可将诗歌 PDF 或 MP3 嵌入笔记，或者复制链接到笔记。
+- **分享 / 复制文件**：在诗歌右边的「⋯」菜单里点「分享 PDF」或「分享 MP3」，就能把文件交给其它软件。
+  - **手机（安卓 / iOS）**：弹出系统分享面板，直接选微信、QQ 等发出去。
+  - **电脑**：因为电脑没有系统分享面板，所以改成**复制文件本身**——点一下，文件就进了剪贴板（等同于在文件夹里选中它按 `Ctrl+C`），再到微信 / QQ 窗口按 `Ctrl+V`（⌘V）粘贴即可。
+  - 万一某台电脑复制不了，会自动打开这个文件所在的文件夹并选中它，按 `Ctrl+C` 就能复制；同时也会把文件的完整路径复制好。
 - **长按定位**：搜索结果里长按一首诗歌，跳到它在分类中的位置；搜索框右侧出现返回按钮，点击回到原搜索界面（位置保留），重新输入检索则自动消失。
 - **PDF 滑动切歌**：侧边栏预览 PDF 时左右滑动（或鼠标拖拽）即可切到上一首 / 下一首。
 - **窗口投影**：在「更多」菜单选「窗口投影」，或预览 PDF 时直接按 `P`，即进入单页投影（一个屏幕一页）。
@@ -144,6 +148,10 @@ Via BRAT: add `ViaCai/Hymns` in the BRAT plugin and let it install the latest re
 6. **Long-press to locate** — long-press a hymn in the search results to jump to its position in the category list; a back button appears next to the search box to return to the original search view (previous position kept). Typing a new search dismisses the button.
 7. **Swipe in the PDF preview** — swipe left/right (or drag with the mouse) in the sidebar PDF preview to go to the previous / next hymn. Vertical scrolling is unaffected.
 8. **Replace or add your own PDF/MP3** — if you have better audio or scanned PDFs, just replace the existing files or drop in new ones following the same naming rule. The plugin re-indexes on the next startup, or you can trigger it with **Rebuild index** in the settings.
+9. **Share or copy a file** — open the "more" (⋯) menu on any hymn and choose **Share PDF** / **Share MP3** (shown as **Copy PDF file** / **Copy MP3 file** on desktop).
+    - On phones (Android / iOS) the system share sheet opens, so you can send the file straight to WeChat, QQ, etc.
+    - On desktop there is no system share sheet, so the **file itself is copied to the clipboard** — just press `Ctrl+V` (⌘V) in the target app.
+    - If copying is not possible on that machine, the file's folder is opened with the file selected, so you can still press `Ctrl+C`; the full file path is copied as well.
 
 ### Settings
 
@@ -155,7 +163,8 @@ Via BRAT: add `ViaCai/Hymns` in the BRAT plugin and let it install the latest re
 ### Notes on plugin behavior
 
 - **Vault enumeration** — the plugin lists the files in your vault in order to locate hymn PDF/MP3 files. This is required so that you do not have to configure each file manually.
-- **Clipboard access** — used only when you click on "Copy lyrics".
+- **Clipboard access** — used when you click "Copy lyrics", or when you use "Share / Copy file" for a PDF or MP3.
+- **External commands (desktop only)** — clicking "Copy PDF file" / "Copy MP3 file" runs a built-in OS command to place that one file on the system clipboard: `powershell` on Windows, `osascript` on macOS, `xclip` (or `wl-copy`) on Linux. Only the absolute path of the selected hymn's file is passed as an argument; the command runs solely in response to your click, nothing is downloaded, and no other command is ever executed.
 - **Dynamic code execution** — the bundled PDF.js library is evaluated with `new Function` inside an isolated sandbox object (`evalPdfLibIsolated`). This keeps the library out of the global scope and allows PDF rendering to work on mobile without a Web Worker. All code is bundled locally inside `main.js` — nothing is downloaded or executed from the network.
 
 ### License

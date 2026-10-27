@@ -143,6 +143,25 @@ const CHANGELOG_CONTENT = {
 ### 修复
 - **侧边栏变窄时，下面的按钮不会再被挡住了**
   在侧边栏里预览诗歌、或者播放诗歌时，如果侧边栏拉得很窄，下面那一排按钮（比如「更多」「关闭」「查看PDF」「播放列表」等）以前会被挤到外面、点不到。现在按钮会自动换行，无论侧边栏多窄，所有按钮都看得清、点得到。`,
+
+  '1.0.8': `## [1.0.8] - 2026-10-28
+
+### 本次更新
+- **可以把诗歌文件分享给其它软件了**
+  在诗歌右边的「⋯」菜单里，新加了分享相关的一项：
+    - **手机（安卓、苹果都支持）**：点「分享 PDF」或「分享 MP3」，会弹出手机的分享面板，直接选微信、QQ 就能发出去
+    - **电脑**：点「复制 PDF 文件」或「复制 MP3 文件」，文件就复制好了，再到微信、QQ 里按 \`Ctrl+V\`（苹果电脑按 \`⌘V\`）粘贴即可，和你平时在文件夹里复制文件一模一样
+    - 万一哪台电脑复制不了，插件会自动打开这个文件所在的文件夹，按 \`Ctrl+C\` 就能复制；文件的完整位置也会一并帮你复制好
+
+- **侧边栏的「播放列表」，点一下是看内容了**
+  以前点某个歌单，会直接把整单播放起来；现在点一下是展开，能看到这个歌单里包含了哪几首诗歌。想整单播放的话，点那一行右边的 ▶ 按钮就行。
+
+- **歌单明细里，点歌名就能预览**
+  在点开某个歌单后的明细弹窗里，点某一首诗歌的名字，就能在侧边栏直接打开这首的 PDF 来看。
+
+### 修复
+- **修好了电脑上「复制文件」复制不了的问题**
+  以前在 Windows 电脑上点了复制，会提示「已复制」，但到微信里粘贴却什么都没有。现在换成了系统标准的复制方式，能正常粘出文件了。`,
 };
 
 /* ============ 工具函数 ============ */
@@ -1095,7 +1114,12 @@ class PlaylistDetailModal extends Modal {
         if (cb.checked) this._selected.add(idx); else this._selected.delete(idx);
         updateBar();
       });
-      row.createSpan({ cls: 'hymns-pl-name', text: (idx + 1) + '. ' + label });
+      // 歌名本身可点击 → 在侧边栏预览这首诗歌（与「打开 PDF」按钮同义，不改变当前播放列表）
+      const nameSpan = row.createSpan({ cls: 'hymns-pl-name', text: (idx + 1) + '. ' + label });
+      if (h) {
+        nameSpan.classList.add('hymns-pl-name-link');
+        nameSpan.addEventListener('click', () => this.openPdfAt(idx));
+      }
       // 操作按钮（与其它页面统一）：播放 / 打开PDF / 更多
       if (h) {
         const acts = row.createDiv({ cls: 'hymns-pl-actions' });
@@ -2563,16 +2587,10 @@ class HymnsView extends ItemView {
         recents.forEach((h) => body.appendChild(this.renderItem(h)));
       });
     }
-    // 播放列表（默认折叠）
+    // 播放列表（默认折叠）：点歌单是“展开看看里面有哪些诗歌”，想整单播放请点该行右侧的 ▶
     if (playlists.length) {
-      this.renderCollapsible('🎵 播放列表（点击即播放）', true, (body) => {
-        playlists.forEach((pl) => {
-          const row = body.createDiv({ cls: 'hymns-item hymns-playlist-row' });
-          const info = row.createDiv({ cls: 'hymns-info' });
-          info.createDiv({ cls: 'hymns-code', text: '🎵 ' + pl.name });
-          info.createDiv({ cls: 'hymns-title-text', text: pl.codes.length + ' 首' });
-          row.addEventListener('click', (e) => { e.stopPropagation(); this.plugin.playPlaylist(pl.name); });
-        });
+      this.renderCollapsible('🎵 播放列表', true, (body) => {
+        playlists.forEach((pl) => this.renderPlaylistRow(body, pl));
       });
     }
 
@@ -2600,6 +2618,46 @@ class HymnsView extends ItemView {
     head.addEventListener('click', () => { open = !open; apply(); });
     fillBody(body);
     return section;
+  }
+
+  /* 播放列表里的单个歌单（嵌套折叠块）。
+     交互：点整行 = 展开/收起，列出歌单里的诗歌（点某一首即打开预览，与普通列表完全一致）；
+     行右侧 ▶ = 整单播放（保留原来“一键播放整单”的能力，只是不再是整行的默认行为）。
+     首次展开时才构建子列表：歌单多、每单诗歌多时避免首页一次性渲染整棵树。 */
+  renderPlaylistRow(parent, pl) {
+    const wrap = parent.createDiv({ cls: 'hymns-collapsible hymns-playlist-wrap' });
+    const head = wrap.createDiv({ cls: 'hymns-collapsible-head hymns-playlist-row' });
+
+    const caret = head.createSpan({ cls: 'hymns-collapsible-caret' });
+    setIcon(caret, 'chevron-right');
+    head.createSpan({ cls: 'hymns-collapsible-title', text: '🎵 ' + pl.name + '（' + pl.codes.length + ' 首）' });
+
+    const actions = head.createDiv({ cls: 'hymns-actions' });
+    if (pl.codes.length) {
+      const playBtn = actions.createEl('button', { cls: 'hymns-icon-btn', attr: { 'aria-label': '播放整个播放列表' } });
+      setIcon(playBtn, 'play');
+      playBtn.addEventListener('click', (e) => { e.stopPropagation(); this.plugin.playPlaylist(pl.name); });
+    }
+
+    const body = wrap.createDiv({ cls: 'hymns-collapsible-body' });
+    let open = false, built = false;
+    const apply = () => {
+      body.style.display = open ? '' : 'none';
+      caret.style.transform = open ? 'rotate(90deg)' : 'rotate(0deg)';
+      head.classList.toggle('is-open', open);
+    };
+    apply();
+    head.addEventListener('click', () => {
+      open = !open;
+      if (open && !built) {
+        built = true;
+        const list = pl.codes.map((c) => this.plugin.resolveHymn(c)).filter(Boolean);
+        if (!list.length) body.createDiv({ cls: 'hymns-note', text: '这个播放列表里还没有诗歌。' });
+        else list.forEach((h) => body.appendChild(this.renderItem(h)));
+      }
+      apply();
+    });
+    return wrap;
   }
 
   renderItem(h) {
@@ -2732,7 +2790,211 @@ class HymnsView extends ItemView {
       menu.addItem((i) => i.setTitle('复制 MP3 嵌入').onClick(() => copyText('![[' + embedBase(h.mp3Path) + ']]')));
     }
     menu.addItem((i) => i.setTitle('复制歌词').onClick(() => new LyricsModal(this.app, this.plugin, h).open()));
+    // —— 分享 / 复制文件 ——
+    //   移动端：调起系统分享面板，可直接发给微信等
+    //   桌面端：Electron 没有分享面板，改为复制文件 → 之后手动粘贴到微信等软件
+    menu.addSeparator();
+    const mobile = !!this.app.isMobile;
+    menu.addItem((i) => i
+      .setTitle(mobile ? '分享 PDF' : '复制 PDF 文件')
+      .setIcon(mobile ? 'share-2' : 'copy')
+      .onClick(() => this.shareFile(h, 'pdf')));
+    if (h.mp3Path) {
+      menu.addItem((i) => i
+        .setTitle(mobile ? '分享 MP3' : '复制 MP3 文件')
+        .setIcon(mobile ? 'share-2' : 'copy')
+        .onClick(() => this.shareFile(h, 'mp3')));
+    }
     menu.showAtPosition({ x: evt.clientX, y: evt.clientY });
+  }
+
+  /* 仓库内相对路径 → 磁盘绝对路径（仅桌面端 Node 适配器提供 getFullPath） */
+  absolutePath(relPath) {
+    try {
+      const adapter = this.app.vault.adapter;
+      if (adapter && typeof adapter.getFullPath === 'function') return adapter.getFullPath(relPath);
+    } catch (e) { /* ignore */ }
+    return relPath;
+  }
+
+  /* 是否为用户主动取消分享（不算错误，不弹提示） */
+  isShareCancel(e) {
+    return !!e && (e.name === 'AbortError' || /cancel|abort/i.test(e.message || ''));
+  }
+
+  /* 跑一条系统命令（仅桌面端，用于把文件写进系统剪贴板）。
+     用「命令 + 参数数组」的方式调用，不让 cmd / shell 二次解析路径，
+     路径里有空格、中文、& 之类字符也不会出错；带 8 秒超时，卡住不会拖死界面。
+     wait=false 表示只负责把命令「启动」起来就返回（比如打开资源管理器，它不一定会退出）。 */
+  runSystemCommand(cmd, args, stdin, wait) {
+    const req = (typeof window !== 'undefined' && window.require)
+      || (typeof require !== 'undefined' ? require : null);
+    if (!req || !cmd) return Promise.resolve(false);
+    let cp = null;
+    try { cp = req('child_process'); } catch (e) { return Promise.resolve(false); }
+    if (!cp || typeof cp.spawn !== 'function') return Promise.resolve(false);
+    return new Promise((resolve) => {
+      let settled = false;
+      let timer = null;
+      const finish = (ok) => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        resolve(ok);
+      };
+      let child = null;
+      try {
+        child = cp.spawn(cmd, args, {
+          stdio: [stdin != null ? 'pipe' : 'ignore', 'ignore', 'ignore'],
+          windowsHide: true,
+        });
+      } catch (e) { finish(false); return; }
+      if (wait === false) { try { child.unref(); } catch (e) { /* ignore */ } finish(true); return; }
+      timer = setTimeout(() => { try { child.kill(); } catch (e) { /* ignore */ } finish(false); }, 8000);
+      child.on('error', () => finish(false));
+      child.on('close', (code) => finish(code === 0));
+      if (stdin != null) { try { child.stdin.end(stdin); } catch (e) { /* ignore */ } }
+    });
+  }
+
+  /* 桌面端「复制文件」首选：用系统自带命令把「文件引用」写进剪贴板。
+     关键是写引用而不是文件内容，粘贴时系统才会把它当文件处理，
+     效果等同于在资源管理器里选中该文件按 Ctrl+C。
+       - macOS:   osascript → POSIX file
+       - Windows: PowerShell → .NET 的 DataObject / FileDropList
+       - Linux:   xclip（X11）或 wl-copy（Wayland）→ text/uri-list */
+  async copyFileByCommand(relPath) {
+    const abs = String(this.absolutePath(relPath));
+    const plat = (typeof process !== 'undefined' && process.platform) || '';
+    try {
+      if (plat === 'darwin') {
+        const script = 'set the clipboard to POSIX file "' + abs.replace(/"/g, '\\"') + '"';
+        return await this.runSystemCommand('osascript', ['-e', script]);
+      }
+      if (plat === 'win32') {
+        // 必须用 DataObject 且 SetDataObject 的第 2 个参数给 $true（立即写入）：
+        // 直接 SetFileDropList 是「延迟渲染」，PowerShell 一退出剪贴板内容就没了。
+        const safe = abs.replace(/'/g, "''");
+        const ps = 'Add-Type -AssemblyName System.Windows.Forms;'
+          + '$d = New-Object System.Windows.Forms.DataObject;'
+          + '$c = New-Object System.Collections.Specialized.StringCollection;'
+          + "$c.Add('" + safe + "');"
+          + '$d.SetFileDropList($c);'
+          + '[System.Windows.Forms.Clipboard]::SetDataObject($d, $true)';
+        return await this.runSystemCommand('powershell', ['-NoProfile', '-STA', '-Command', ps]);
+      }
+      // Linux：X11 用 xclip，Wayland 用 wl-copy，逐个尝试
+      const uri = 'file://' + encodeURI(abs);
+      if (await this.runSystemCommand('xclip', ['-selection', 'clipboard', '-t', 'text/uri-list'], uri)) return true;
+      return await this.runSystemCommand('wl-copy', ['-t', 'text/uri-list'], uri);
+    } catch (e) { return false; }
+  }
+
+  /* 次选：用 Electron 的原生剪贴板写文件引用（仅 macOS / Linux）。
+     Windows 上直接跳过：Electron 只接受字符串格式名，'CF_HDROP' 会被
+     RegisterClipboardFormat 注册成自定义格式（ID ≠ 15），资源管理器 / 微信
+     读标准 CF_HDROP 时找不到，于是「提示成功其实无效」——正是这次的坑。
+     Windows 一律走上面的原生命令。
+     写完回读一次，确认真的进了剪贴板，避免假成功。 */
+  async copyFileByElectron(relPath) {
+    try {
+      const req = (typeof window !== 'undefined' && window.require)
+      || (typeof require !== 'undefined' ? require : null);
+      if (!req || typeof process === 'undefined' || typeof Buffer === 'undefined') return false;
+      if (process.platform === 'win32') return false;   // 见上方说明
+      const electron = req('electron');
+      const clipboard = electron && electron.clipboard;
+      if (!clipboard || typeof clipboard.writeBuffer !== 'function') return false;
+      const abs = String(this.absolutePath(relPath));
+      const verify = (fmt) => {
+        try { const back = clipboard.readBuffer(fmt); return !!(back && back.length); } catch (e) { return false; }
+      };
+      if (process.platform === 'darwin') {
+        const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const plist = '<?xml version="1.0" encoding="UTF-8"?>\n'
+          + '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+          + '<plist version="1.0"><array><string>' + esc(abs) + '</string></array></plist>';
+        clipboard.writeBuffer('NSFilenamesPboardType', Buffer.from(plist, 'utf8'));
+        return verify('NSFilenamesPboardType');
+      }
+      clipboard.writeBuffer('x-special/gnome-copied-files',
+        Buffer.from('copy\nfile://' + encodeURI(abs) + '\n', 'utf8'));
+      return verify('x-special/gnome-copied-files');
+    } catch (e) { return false; }
+  }
+
+  /* 最后一条路：用浏览器的异步剪贴板 API 直接写文件内容。
+     部分应用认，部分不认，所以放最后。失败即返回 false，由调用方兜底。 */
+  async copyFileByApi(relPath, mime) {
+    try {
+      const buf = await this.app.vault.adapter.readBinary(relPath);
+      const blob = new Blob([buf], { type: mime });
+      await navigator.clipboard.write([new ClipboardItem({ [mime]: blob })]);
+      return true;
+    } catch (e) { return false; }
+  }
+
+  /* 兜底：在文件管理器里打开这个文件的所在位置（Windows 下会顺带选中它）。
+     复制万一在本机不生效时，用它保证一定能拿到文件：窗口弹出后按 Ctrl+C 就能复制。 */
+  async revealInFileManager(relPath) {
+    const abs = String(this.absolutePath(relPath));
+    const plat = (typeof process !== 'undefined' && process.platform) || '';
+    try {
+      if (plat === 'win32') return await this.runSystemCommand('explorer', ['/select,' + abs.replace(/\//g, '\\')], null, false);
+      if (plat === 'darwin') return await this.runSystemCommand('open', ['-R', abs], null, false);
+      const i = abs.lastIndexOf('/');
+      return await this.runSystemCommand('xdg-open', [i > 0 ? abs.slice(0, i) : abs], null, false);
+    } catch (e) { return false; }
+  }
+
+  /* 桌面端「复制文件」：把文件放进系统剪贴板，之后可在微信 / QQ 等窗口里 Ctrl+V 粘贴。
+     按可靠程度依次尝试，一条不通就换下一条；全都不行才返回 false，由调用方兜底复制文件位置。 */
+  async copyFileToClipboard(relPath, mime) {
+    if (await this.copyFileByCommand(relPath)) return true;
+    if (await this.copyFileByElectron(relPath)) return true;
+    return await this.copyFileByApi(relPath, mime);
+  }
+
+  /* 分享诗歌文件。
+     移动端（安卓 / iOS）：调起系统分享面板，可直接发给微信等。
+       Web Share API 的 files 能力两端通用（安卓 WebView、iOS 15+ 均支持），故优先走它。
+     桌面端：Electron 没有系统分享面板，改为「复制文件」——写进系统剪贴板后手动粘贴到微信等软件。
+     都不行则退回复制文件路径，至少让用户知道文件在哪。 */
+  async shareFile(h, kind) {
+    const isPdf = kind === 'pdf';
+    const rel = isPdf ? h.pdfPath : h.mp3Path;
+    if (!rel) { new Notice(isPdf ? '该诗歌暂无 PDF' : '该诗歌暂无 MP3'); return; }
+    const mime = isPdf ? 'application/pdf' : 'audio/mpeg';
+    const name = rel.split('/').pop() || (hymnLabel(h) + (isPdf ? '.pdf' : '.mp3'));
+
+    // —— 系统分享面板（移动端为主）——
+    if (navigator.share) {
+      try {
+        const buf = await this.app.vault.adapter.readBinary(rel);
+        const file = new File([new Blob([buf], { type: mime })], name, { type: mime });
+        // canShare 缺失时按“支持”处理；存在则必须真的能分享文件（只支持文字的环境要跳过）
+        if (!navigator.canShare || navigator.canShare({ files: [file] })) {
+          await navigator.share({ files: [file], title: hymnLabel(h) });
+          return;
+        }
+      } catch (e) {
+        if (this.isShareCancel(e)) return;               // 用户取消，静默
+      }
+    }
+
+    // —— 桌面端：复制文件到剪贴板 ——
+    if (await this.copyFileToClipboard(rel, mime)) {
+      new Notice('已复制文件：' + name + '\n到微信 / QQ 窗口里按 Ctrl+V（⌘V）粘贴即可');
+      return;
+    }
+
+    // —— 兜底：打开所在位置并把路径也复制好，保证一定能拿到文件 ——
+    const abs = this.absolutePath(rel);
+    copyText(abs);
+    const shown = await this.revealInFileManager(rel);
+    new Notice(shown
+      ? '这个环境直接复制文件没成功，已打开文件所在位置，按 Ctrl+C 即可复制；文件位置也已复制：' + abs
+      : '这个环境复制不了文件本身，已复制文件位置：' + abs);
   }
 
   /* ---- 查看模式（侧边栏内显示 PDF） ---- */
