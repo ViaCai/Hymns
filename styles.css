@@ -15,6 +15,66 @@
   min-height: 0;
 }
 
+/* ===== 双列模式（标签页 / 宽面板）：左列内容，右列控制 =====
+   窗口够宽时由 JS 在根容器上挂 .is-wide 并把搜索、预览按钮、播放栏移进右列；
+   窗口变窄后自动还原成与侧边栏一致的单列。 */
+.hymns-view.is-wide {
+  flex-direction: row;
+  gap: 10px;
+  padding: 8px;
+}
+.hymns-view.is-wide > .hymns-listwrap,
+.hymns-view.is-wide > .hymns-viewerwrap { flex: 1 1 auto; min-width: 0; }
+.hymns-col-right {
+  /* 宽屏固定 320；屏幕偏窄时（手机横屏常见 720~900）按比例收窄，
+     保证左列至少还有约六成宽度放列表 / PDF */
+  flex: 0 1 320px; width: 320px; max-width: 40%; min-width: 240px;
+  display: flex; flex-direction: column; gap: 8px;
+  /* 整列不滚动：滚动只发生在上层内容区，滑条不会一路画到播放栏旁边 */
+  min-height: 0; overflow: hidden;
+}
+/* 右列的上层内容区：占满播放栏以外的全部高度。
+   搜索框 / 预览按钮被推到它的最底部 → 紧贴播放栏；
+   「最近打开 / 播放列表」作为浮层从顶部往下铺，展开得再长也不会越过这一层盖住播放栏。 */
+.hymns-col-top {
+  position: relative;               /* 备用：折叠块如需绝对定位时作基准 */
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex; flex-direction: column; gap: 8px;
+  /* 与侧边栏 .hymns-results 同一套机制：本层就是滚动容器，并预留滑条槽位（scrollbar-gutter）。
+     「最近打开 / 播放列表」展开后内容超出时，滑条出现在本区域右侧，绝不会被裁掉，
+     也不会画到下方播放栏那一层去。 */
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+/* 右列里的搜索框 / 预览按钮：紧贴播放栏上方，独立于上面的滚动区
+   （和侧边栏一致：搜索框在 results 之外、固定在底部，滚动列表时它不动）。 */
+.hymns-col-right > .hymns-footbar,
+.hymns-col-right > .hymns-viewer-actions {
+  flex: 0 0 auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--background-primary);
+}
+.hymns-col-right > .hymns-player {
+  flex: 0 0 auto;
+  /* 播放栏是右列的独立一层，永远在最底部：既不随上层滚动，也不会被上层浮层盖住 */
+  position: relative;
+  z-index: 5;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+}
+/* 纯符号按钮：只有图标，没有按钮方框 */
+.hymns-plain-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  background: none; border: none; box-shadow: none;
+  padding: 2px; margin: 0; cursor: pointer;
+  color: var(--text-muted);
+}
+.hymns-plain-btn:hover { color: var(--text-normal); }
+.hymns-plain-btn svg { width: 16px; height: 16px; }
+.hymns-newtab-btn { margin-left: auto; flex: 0 0 auto; }
+
 .hymns-header {
   padding:10px 10px 6px 10px;
   border-bottom: 1px solid var(--background-modifier-border);
@@ -39,6 +99,15 @@
   font-size: var(--font-ui-small);
 }
 .hymns-search:focus { outline: 2px solid var(--interactive-accent); outline-offset: -1px; }
+
+/* 搜索框 + 清空按钮：按钮浮在输入框内的最右侧 */
+.hymns-search-wrap { position: relative; flex: 1 1 auto; min-width: 0; display: flex; align-items: center; }
+.hymns-search-wrap .hymns-search { width: 100%; padding-right: 30px; }
+.hymns-search-clear {
+  position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+  padding: 3px; border-radius: 50%;
+}
+.hymns-search-clear:hover { background: var(--background-modifier-hover); }
 
 /* 底部工具条：搜索框 + 随机按钮 在列表下方；分类与翻页再下一行 */
 .hymns-footbar {
@@ -223,6 +292,20 @@ button.hymns-icon-btn.hymns-icon-btn.hymns-random-btn:hover { color: var(--inter
 .hymns-cat-card-count { color: var(--text-muted); font-size: var(--font-ui-smaller); }
 
 /* 可折叠区块（最近打开 / 播放列表，默认折叠） */
+/* 「最近打开 / 播放列表」的容器：双列模式下作为右列滚动层（.hymns-col-top）里的正常流元素排在顶部，
+   单列模式下留在结果列表里（与侧边栏一致）。
+   不用绝对定位浮层——那种写法在个别 Electron 版本里会被外层裁掉、滑条出不来；
+   改成和侧边栏 .hymns-results 一样的机制后，内容超出时由 .hymns-col-top 出滑条（已预留槽位）。 */
+.hymns-home-sections { display: flex; flex-direction: column; }
+.hymns-col-top > .hymns-home-sections {
+  flex: 0 0 auto;
+  position: relative;
+  z-index: 3;
+  /* 内部两块各自已有边框，外面不再套双层方框 */
+  border: none;
+  background: transparent;
+}
+
 .hymns-collapsible {
   margin: 6px 2px;
   border: 1px solid var(--background-modifier-border);
@@ -433,6 +516,15 @@ button.hymns-icon-btn.hymns-icon-btn svg {
   border-bottom: 1px solid var(--background-modifier-border);
 }
 .hymns-viewer-title { flex: 1 1 auto; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 从歌单进入预览时，标题右侧的来源标记（歌单名 + 第几首/共几首） */
+.hymns-viewer-ctx {
+  flex: 0 0 auto; max-width: 45%;
+  font-size: 11px; line-height: 1.4;
+  padding: 1px 6px; border-radius: 8px;
+  color: var(--text-muted);
+  background: var(--background-modifier-hover);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .hymns-viewer-body {
   flex: 1 1 auto; min-height: 0;
   overflow-y: auto;

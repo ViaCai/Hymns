@@ -10,6 +10,9 @@
 
 - **实时搜索**：按编号或关键词即时过滤，分组展示（大本诗歌 / 补充诗歌 / 唱诗人 / 新歌颂咏 / 儿童诗歌 / 青年诗歌 / 特会诗歌 / 其他）。
 - **PDF 预览**：单击诗歌在侧边栏查看，双击诗歌在主视图查看。
+- **在新标签页打开**：侧边栏的标题栏右上角有个符号按钮，点了会在新标签页打开一份完整的诗歌面板（侧边栏那份可以留着，两边互不干扰）。标签页里本身就是大面板，不再显示这个按钮。
+  - 窗口够宽时自动变**双列**：左列放诗歌列表 / 搜索结果 / PDF 预览；右列自上而下是「最近打开 / 播放列表」→ 搜索栏或预览按钮（看当前是浏览还是预览）→ MP3 播放。
+  - 窗口变窄自动回到**单列**，与侧边栏的界面完全一致。拖动窗口大小、手机横竖屏切换都会实时变化（手机横屏一般就是双列，竖屏是单列）。
 - **MP3 播放**：一键播放诗歌音频，支持顺序 / 单曲循环 / 列表循环；可切换音频来源。
 - **收藏与播放列表**：收藏诗歌；内置 7 个主题歌单（倪柝声 / 李常受 / 余洁麟 / 和受恩 / 霍华德 / 以撒·华滋 / 约翰·牛顿），也可自建歌单。
 - **联动**：可在底部播放栏「联动」里勾选 MP3 随 PDF 切换以及 PDF 随 MP3 切换。
@@ -143,7 +146,7 @@ Via BRAT: add `ViaCai/Hymns` in the BRAT plugin and let it install the latest re
 1. Put your hymn PDF/MP3 files anywhere inside your vault. The folder names are configurable in the plugin settings — leave them empty to scan the whole vault.
 2. Hymn numbers are detected from file names, e.g. `D116 <title>.pdf` or `D116-<title>.mp3`.
 3. On every startup the plugin scans the vault and builds the hymn index and the lyrics index automatically.
-4. Open the Hymns view from the ribbon, then search, preview the PDF and play the MP3.
+4. Open the Hymns view from the ribbon, then search, preview the PDF and play the MP3. In the **sidebar**, click the icon at the far right of the panel title bar to open a second, full-size Hymns panel in a new tab (the button is not shown inside the tab itself). The tab switches between a two-column layout and the single-column sidebar layout according to the window width (phone landscape is usually two-column, portrait single-column). In two-column mode the left column holds the list / search results / PDF preview; the right column runs top to bottom: "Recently opened" & "Playlists" → the search bar (while browsing) or the preview buttons (while previewing a PDF) → the MP3 player.
 5. **Copy a link or embed to your note** — on any hymn, open the "more" (⋯) menu and copy a wiki link or an embed for its PDF or MP3, e.g. `[[D116.pdf]]` or `![[D116.pdf]]` (and the same for MP3). Paste them straight into any note.
 6. **Long-press to locate** — long-press a hymn in the search results to jump to its position in the category list; a back button appears next to the search box to return to the original search view (previous position kept). Typing a new search dismisses the button.
 7. **Swipe in the PDF preview** — swipe left/right (or drag with the mouse) in the sidebar PDF preview to go to the previous / next hymn. Vertical scrolling is unaffected.

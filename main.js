@@ -162,6 +162,34 @@ const CHANGELOG_CONTENT = {
 ### 修复
 - **修好了电脑上「复制文件」复制不了的问题**
   以前在 Windows 电脑上点了复制，会提示「已复制」，但到微信里粘贴却什么都没有。现在换成了系统标准的复制方式，能正常粘出文件了。`,
+
+  '2.0.0': `## [2.0.0] - 2026-10-29
+
+### 本次更新
+- **插件可以「在新标签页打开」了**
+  标题栏最右边多了一个按钮，点一下就能把诗歌面板在独立标签页里打开，方便在手机横屏、或者想一边看列表一边看预览时使用。标签页里不会出现这个按钮（避免自己开自己）。
+- **标签页会按宽度自动单列 / 双列**
+  窗口够宽（如电脑、手机横屏）时自动变成双列：左边是列表 / 预览，右边是搜索、预览按钮、播放；窗口变窄（如手机竖屏、拉窄的侧边栏）时自动变回单列。现在手机横屏也能用双列了。
+- **双列右侧的布局固定了顺序**
+  最上面是「最近打开 / 播放列表」，中间是搜索框（或在预览时变成预览按钮），最下面是 MP3 播放栏（始终固定在底部，不会乱跑）。
+- **搜索框里有了「清空」按钮**
+  搜索框里有字时，右边会出现一个 ×，点一下就把字全清掉，不用一个一个删。
+- **歌单里预览更顺手了**
+  在歌单里点诗歌进入预览后，左右翻页只在这一张歌单里切换；点「播放」会把整张歌单加进当前播放列表。
+
+### 修复
+- **修好了「重开 Obsidian 后标签页用不了」的问题**
+  以前重开 Obsidian，标签页有时会一直显示「没扫描到诗歌」、点不动，要关掉重开才行。现在所有面板都会正常刷新，打开即用。
+- **修好了标签页里「最近打开 / 播放列表」内容多了看不到的问题**
+  以前这一块内容一多就被截断，也没有滑条。现在和侧边栏一样，会预留滑条、可以滚动查看全部。
+- **「最近打开 / 播放列表」不再越堆越多**
+  以前每次刷新都会多复制一份、越积越高，现在做了去重。
+- **预览过的诗歌会正确记进「最近打开」了**
+  以前像 D009 这样预览过的诗歌，在「最近打开」里找不到，记账不准；现在预览就会记进去。
+- **去掉了「最近打开 / 播放列表」外面多出来的一层方框**
+  以前这块外面套了两层框，看起来重重的，现在只保留里面各自的边框。
+- **修好了「最近打开 / 播放列表」有时点不动的问题**
+  以前在右侧这一块，有时点「最近打开」或「播放列表」没反应、有时又有反应。原因是左侧列表每次刷新都会把这一块重建一遍，刷新刚好撞上你点击的瞬间，这次点击就被丢掉了。现在这一块建好就稳定保留、原地刷新，不再被重建，点一下就能稳定展开 / 收起。`,
 };
 
 /* ============ 工具函数 ============ */
@@ -662,7 +690,7 @@ class HymnsSettingTab extends PluginSettingTab {
         await this.plugin.buildIndex();
         b.setButtonText('立即重建索引'); b.setDisabled(false);
         new Notice('诗歌索引已重建，共 ' + this.plugin.hymns.length + ' 首');
-        if (this.plugin.view) this.plugin.view.renderListMode();
+        this.plugin.refreshAllViews();
       }));
     const lyricsAll = this.plugin.lyrics || {};
     const lyricsCount = Object.keys(lyricsAll).length;
@@ -743,6 +771,7 @@ class HymnsSettingTab extends PluginSettingTab {
       this.plugin.settings.pdfFolder = ''; this.plugin.settings.mp3Folder = '';
       await this.plugin.saveAll();
       await this.plugin.buildIndex();
+      this.plugin.refreshAllViews();
       this.display();
       new Notice('已改为扫描整个仓库，共索引 ' + this.plugin.hymns.length + ' 首');
     });
@@ -833,7 +862,7 @@ class HymnsSettingTab extends PluginSettingTab {
     this.display();
     const v = this.plugin.settings[key];
     new Notice((key === 'mp3Folder' ? 'MP3' : 'PDF') + ' 文件夹：' + (v || '整个仓库') + '，共索引 ' + this.plugin.hymns.length + ' 首');
-    if (this.plugin.view) this.plugin.view.renderListMode();
+    this.plugin.refreshAllViews();
   }
 }
 
@@ -1033,6 +1062,8 @@ class PlaylistDetailModal extends Modal {
   listHymns() {
     return this.getCodes().map((c) => this.plugin.resolveHymn(c)).filter(Boolean);
   }
+  /* 显示用的列表名：「当前播放列表（实时）」这个特殊列表不显示内部标识名 */
+  displayName() { return this.isCurrent() ? '当前播放列表（实时）' : this.name; }
   /* 返回上一页：关闭本页并回到“播放列表管理” */
   goBack() {
     this.close();
@@ -1045,7 +1076,7 @@ class PlaylistDetailModal extends Modal {
     if (!h) return;
     const view = this.plugin.view;
     if (!view) { new Notice('请先打开诗歌侧边栏'); return; }
-    view.setBrowseList(this.listHymns());  // 先让该列表成为浏览列表
+    view.setBrowseList(this.listHymns(), this.displayName());  // 先让该列表成为浏览列表
     view.playFromList(h);                  // 主动播放 → playFromList 会把当前播放列表设为该列表
     this.close();
   }
@@ -1056,7 +1087,7 @@ class PlaylistDetailModal extends Modal {
     if (!h) return;
     const view = this.plugin.view;
     if (!view) { new Notice('请先打开诗歌侧边栏'); return; }
-    view.setBrowseList(this.listHymns());   // 只切换“正在浏览的列表”
+    view.setBrowseList(this.listHymns(), this.displayName());   // 只切换“正在浏览的列表”
     view.openInViewer(h);
     this.close();
   }
@@ -1913,6 +1944,7 @@ class HymnsView extends ItemView {
     this.query = '';
     this.catFilter = null;
     this.currentList = [];
+    this.browseName = '';    // 当前浏览列表的来源名称（如播放列表名），为空表示普通浏览
     this.page = 0;
     this.pageKeys = [];      // 当前列表可用的页码键（0/1/2… 与附录页 S）
     this.selectedIndex = -1;
@@ -1941,11 +1973,14 @@ class HymnsView extends ItemView {
     const titleRow = header.createDiv({ cls: 'hymns-title' });
     titleRow.createSpan({ text: '诗歌 Hymns' });
     this.countEl = titleRow.createSpan({ cls: 'hymns-count' });
+    // 标题栏最右侧：在新标签页打开本插件（只有一个符号，没有按钮方框）
+    this.createNewTabButton(titleRow);
 
     this.resultsEl = this.listWrap.createDiv({ cls: 'hymns-results' });
 
     /* ---- 底部工具条：搜索框在下、分类与翻页再下一行（分类右侧为 上一页|页码|下一页） ---- */
     const foot = this.listWrap.createDiv({ cls: 'hymns-footbar' });
+    this.footEl = foot;   // 双列模式下会被移到右列（搜索/分类/翻页）
 
     const footSearch = foot.createDiv({ cls: 'hymns-foot-search' });
     // 随机一首：只显示符号，位置在搜索框前面
@@ -1954,12 +1989,22 @@ class HymnsView extends ItemView {
     if (!this.randomBtn.querySelector('svg')) setIcon(this.randomBtn, 'shuffle'); // 图标兜底
     this.randomBtn.addEventListener('click', () => this.playRandom());
 
-    this.searchEl = footSearch.createEl('input', {
+    // 搜索框 + 清空按钮：按钮浮在输入框内的最右侧，只有框里有内容时才出现
+    const searchWrap = footSearch.createDiv({ cls: 'hymns-search-wrap' });
+    this.searchEl = searchWrap.createEl('input', {
       cls: 'hymns-search',
       attr: { type: 'text', placeholder: '编号(如 D116)或关键词(空格分隔)…' }
     });
     this.searchEl.addEventListener('input', () => this.onQueryChanged());
     this.searchEl.addEventListener('keydown', (e) => this.onKey(e));
+    this.clearBtn = searchWrap.createEl('button', {
+      cls: 'hymns-plain-btn hymns-search-clear',
+      attr: { 'aria-label': '清空搜索', title: '清空搜索' }
+    });
+    setIcon(this.clearBtn, 'x');
+    if (!this.clearBtn.querySelector('svg')) setIcon(this.clearBtn, 'circle-x'); // 图标兜底
+    this.clearBtn.style.display = 'none';
+    this.clearBtn.addEventListener('click', (e) => { e.stopPropagation(); this.clearQuery(); });
 
     // 返回按钮（搜索框最右）：长按搜索结果跳到分类位置后出现，点击返回原搜索界面
     this.backBtn = footSearch.createEl('button', {
@@ -2010,7 +2055,185 @@ class HymnsView extends ItemView {
     // 播放栏（固定）
     this.buildPlayer(root);
 
+    // 右列容器：仅在“双列模式”（窗口够宽，如标签页）下启用，窄窗口时会被摘掉。
+    // 右列内部再分两层：
+    //   上层 rightColTop = 「最近打开 / 播放列表」浮层 + 搜索框 / 预览按钮（按钮贴着播放栏）
+    //   下层 = 播放栏（永远钉在最底部，不参与滚动，滑条也不会越过它）
+    this.rightCol = root.createDiv({ cls: 'hymns-col-right' });
+    this.rightColTop = this.rightCol.createDiv({ cls: 'hymns-col-top' });
+    this.bindResponsiveColumns();
+    this.applyResponsiveColumns();
+
+    // 侧边栏与标签页可能同时开着：点哪个面板，就以哪个为“当前视图”，
+    // 免得在侧边栏里点播放列表，结果跑到另一个面板去打开。
+    this.registerDomEvent(this.containerEl, 'pointerdown', () => {
+      if (this.plugin) this.plugin.view = this;
+    }, true);
+
     this.renderListMode();
+  }
+
+  /* ---- 在新标签页打开 ---- */
+  /* 标题栏 / 预览工具栏右上角的纯符号按钮：点击后另开一个标签页显示本插件界面。
+     只有侧边栏里才需要它——标签页 / 主区本身就是大面板，再开一个没有意义，故不创建。 */
+  /* 判断本视图是否位于侧边栏 */
+  isInSidebar() {
+    try {
+      const ws = this.app && this.app.workspace;
+      if (ws && this.leaf && typeof this.leaf.getRoot === 'function') {
+        const root = this.leaf.getRoot();
+        if (ws.leftSplit && root === ws.leftSplit) return true;
+        if (ws.rightSplit && root === ws.rightSplit) return true;
+        return false;
+      }
+    } catch (e) { /* 落到下面的 DOM 兜底 */ }
+    // 老版本没有 getRoot()：从 DOM 上找侧边栏容器
+    try {
+      const el = this.containerEl && this.containerEl.closest
+        ? this.containerEl.closest('.mod-left-split, .mod-right-split') : null;
+      return !!el;
+    } catch (e) { return true; }   // 判断不了就保留按钮，避免误删入口
+  }
+  createNewTabButton(parent) {
+    if (!this.isInSidebar()) return null;
+    const b = parent.createEl('button', {
+      cls: 'hymns-plain-btn hymns-newtab-btn',
+      attr: { 'aria-label': '在新标签页打开诗歌面板', title: '在新标签页打开' }
+    });
+    setIcon(b, 'external-link');
+    if (!b.querySelector('svg')) setIcon(b, 'maximize');   // 图标兜底
+    b.addEventListener('click', (e) => { e.stopPropagation(); this.plugin.openHymnsInNewTab(); });
+    return b;
+  }
+
+  /* ---- 单列 / 双列 ----
+     只看面板实际宽度决定，手机端同样适用：竖屏窄 → 单列；横屏够宽 → 双列。
+       左列 = 诗歌列表 / 搜索结果 / PDF 预览；右列 = 搜索、预览按钮、MP3 播放。
+     窗口变窄 → 回到与侧边栏完全一致的单列。 */
+  bindResponsiveColumns() {
+    if (typeof ResizeObserver === 'function') {
+      this._ro = new ResizeObserver(() => this.onContainerResize());
+      this._ro.observe(this.containerEl);
+    }
+    // window resize / 转屏都兜上：部分手机 WebView 转屏时 ResizeObserver 触发不及时
+    this._onWinResize = () => this.onContainerResize();
+    window.addEventListener('resize', this._onWinResize);
+    window.addEventListener('orientationchange', this._onWinResize);
+  }
+  /* 容器尺寸变化：先决定单列还是双列；预览模式下再按新宽度重画 PDF
+     （拖动窗口会连续触发，所以做防抖，只在停下后画一次）。 */
+  onContainerResize() {
+    this.applyResponsiveColumns(true);
+    if (this.mode !== 'viewer' || !this.viewerBody) return;
+    const w = (this.containerEl && this.containerEl.clientWidth) || 0;
+    if (Math.abs(w - (this._lastW || 0)) < 24) return;
+    this._lastW = w;
+    clearTimeout(this._relayoutTimer);
+    this._relayoutTimer = setTimeout(() => { if (this.mode === 'viewer') this.renderViewer(); }, 220);
+  }
+  /* 是否够宽到可以分两列。
+     只看宽度，不区分手机还是电脑——手机横屏（常见 780~930 CSS px）同样走双列。
+     阈值取 720：右列最窄 260px 时左列还剩约 460px，PDF 与列表都还看得清；
+     手机竖屏（360~430）自然落到单列。 */
+  isWideEnough() {
+    let w = (this.containerEl && this.containerEl.clientWidth) || 0;
+    if (!w && typeof window !== 'undefined') w = window.innerWidth || 0;   // 转屏瞬间的兜底
+    return w >= 720;
+  }
+  /* 彻底销毁上一轮的「最近打开 / 播放列表」容器（它可能挂在右列，不在 resultsEl 里）。 */
+  disposeHomeSections() {
+    if (this.homeSections) {
+      try { this.homeSections.remove(); } catch (e) { /* ignore */ }
+      this.homeSections = null;
+    }
+    // 保险：清掉右列里可能残留的同类容器（避免历史版本留下的重复块越堆越多）
+    if (this.rightCol) {
+      try {
+        this.rightCol.querySelectorAll('.hymns-home-sections')
+          .forEach((el) => { if (el !== this.homeSections) el.remove(); });
+      } catch (e) { /* ignore */ }
+    }
+  }
+  /* 原地刷新「最近打开 / 播放列表」的内容（例如刚预览 / 播放了一首，最近打开要立刻多出这一条）。
+     只清空并重新填充各区块的 body，绝不销毁整块：保留头部原有的点击处理器与展开 / 折叠状态，
+     也避免在刷新瞬间替换节点导致正在进行的点击丢失（之前“有时点不动”的根因）。 */
+  refreshHomeSections() {
+    if (!this.homeSections || !this.homeSections.isConnected) return;
+    if (this._recentFill) this._refillSection('🕘 最近打开', this._recentFill);
+    if (this._playlistFill) this._refillSection('🎵 播放列表', this._playlistFill);
+  }
+  _refillSection(title, fill) {
+    if (!this.homeSections) return;
+    let sec = null;
+    try {
+      sec = [].slice.call(this.homeSections.querySelectorAll(':scope > .hymns-collapsible'))
+        .find((s) => { const t = s.querySelector('.hymns-collapsible-title'); return t && t.textContent === title; });
+    } catch (e) { /* ignore */ }
+    if (!sec) return;
+    const body = sec.querySelector('.hymns-collapsible-body');
+    if (!body) return;
+    body.empty();
+    fill(body);
+  }
+  /* 把「最近打开 / 播放列表」放到该在的位置：
+     双列 → 右列最顶部（浮在上层，展开时可以盖住下面的搜索框 / 预览按钮，但盖不到播放栏）；
+     单列 → 留在结果列表里（与侧边栏一致）。 */
+  placeHomeSections() {
+    if (!this.homeSections) return;
+    const host = this.rightColTop || this.rightCol;      // 双列时挂在右列的上层容器里
+    if (this.isWideEnough() && host) {
+      // 右列里只保留一份，避免重复堆积
+      try {
+        this.rightCol.querySelectorAll('.hymns-home-sections')
+          .forEach((el) => { if (el !== this.homeSections) el.remove(); });
+      } catch (e) { /* ignore */ }
+      if (this.rightCol.parentNode !== this.contentEl) this.contentEl.appendChild(this.rightCol);
+      if (this.homeSections !== host.firstChild) {
+        host.insertBefore(this.homeSections, host.firstChild);
+      }
+      this.homeSections.style.removeProperty('display');
+    } else if (this.homeSections.parentNode === host) {
+      // 单列：首页上下文里放回结果列表；非首页（搜索/分类）下直接摘掉，
+      // 免得它跑到搜索结果末尾去
+      if (this._sectionsInHome) this.resultsEl.appendChild(this.homeSections);
+      else this.homeSections.remove();
+    }
+  }
+  applyResponsiveColumns(rerenderPdf) {
+    if (!this.rightCol || !this.footEl || !this.playerEl) return;
+    const wide = this.isWideEnough();
+    const key = (wide ? 'w' : 'n') + '|' + this.mode;
+    if (key === this._layoutKey) return;      // 无变化直接返回，避免 ResizeObserver 反复触发
+    this._layoutKey = key;
+    this.contentEl.classList.toggle('is-wide', wide);
+    if (wide) {
+      if (this.rightCol.parentNode !== this.contentEl) this.contentEl.appendChild(this.rightCol);
+      // 右列自上而下固定顺序：
+      //   1) 最近打开 / 播放列表（置顶，浮在上层）
+      //   2) 搜索栏（列表 / 搜索时）或 预览按钮（预览时）——二者互斥，不会同时出现，紧贴播放栏上方
+      //   3) 播放栏（钉在最底部，不随上层滚动）
+      const top = this.rightColTop || this.rightCol;
+      this.placeHomeSections();
+      // 搜索框 / 预览按钮移到右列、紧贴播放栏上方（独立于上面的滚动层，滚动列表时它们不动，
+      // 和侧边栏一致：搜索框在 results 之外、固定在底部）。播放栏永远在最底。
+      if (this.mode === 'viewer') {
+        this.rightCol.appendChild(this.viewerActions);
+        if (this.footEl.parentNode === this.rightCol) this.listWrap.appendChild(this.footEl);
+      } else {
+        this.rightCol.appendChild(this.footEl);
+        if (this.viewerActions.parentNode === this.rightCol) this.viewerWrap.appendChild(this.viewerActions);
+      }
+      this.rightCol.appendChild(this.playerEl);
+    } else {
+      // 还原成侧边栏那样的单列：搜索回到列表底部、预览按钮回到 PDF 下方、播放栏在最下
+      this.placeHomeSections();
+      this.listWrap.appendChild(this.footEl);
+      this.viewerWrap.appendChild(this.viewerActions);
+      this.contentEl.appendChild(this.playerEl);
+      if (this.rightCol.parentNode) this.rightCol.remove();
+    }
+    // 布局变了，PDF 要按新的宽度重画一次，否则预览会停留在旧尺寸
+    if (rerenderPdf && this.mode === 'viewer') this.renderViewer();
   }
 
   /* 随机查阅一首（底部工具条按钮：仅符号）。属于“查阅”行为，
@@ -2124,12 +2347,28 @@ class HymnsView extends ItemView {
     this.disposePdfDoc();
     this.disposePdfCanvases();
     if (this._projection) { try { this._projection.close(); } catch (e) { /* ignore */ } this._projection = null; }
+    if (this._ro) { try { this._ro.disconnect(); } catch (e) { /* ignore */ } this._ro = null; }
+    if (this._onWinResize) {
+      try {
+        window.removeEventListener('resize', this._onWinResize);
+        window.removeEventListener('orientationchange', this._onWinResize);
+      } catch (e) { /* ignore */ }
+      this._onWinResize = null;
+    }
+    clearTimeout(this._relayoutTimer);
+    // 关掉的是“当前视图”时，把指向让给还开着的那个面板，避免操作落到一个已销毁的视图上
+    if (this.plugin && this.plugin.view === this) {
+      const other = this.app.workspace.getLeavesOfType(VIEW_TYPE_HYMNS)
+        .map((l) => l.view).find((v) => v && v !== this);
+      this.plugin.view = other || null;
+    }
     this.contentEl.empty();
   }
 
   /* ---- 播放栏 ---- */
   buildPlayer(root) {
     const player = root.createDiv({ cls: 'hymns-player' });
+    this.playerEl = player;   // 双列模式下会被移到右列
 
     // 第一行：当前播放的歌曲名
     this.nowEl = player.createDiv({ cls: 'hymns-now', text: '尚未播放' });
@@ -2249,9 +2488,12 @@ class HymnsView extends ItemView {
   get hymns() { return this.plugin.hymns; }
 
   /* 设置“正在浏览的列表”：只影响查看/翻页（如查看 PDF 的上一首/下一首），
-     **不会**改变“当前播放列表”。切换分类、搜索、翻页、随机查阅都走这里。 */
-  setBrowseList(list) {
+     **不会**改变“当前播放列表”。切换分类、搜索、翻页、随机查阅都走这里。
+     name 为可选的来源名称（如某个播放列表名），用于在预览顶部标出“正在哪个列表里翻页”，
+     不传则清空——这样回到普通浏览时不会残留上一次的歌单上下文。 */
+  setBrowseList(list, name) {
     this.currentList = list;
+    this.browseName = name || '';
   }
   /* 设置当前播放列表（仅当用户主动“播放”时才调用）：同步到插件级 currentSequence */
   setCurrentList(list) {
@@ -2264,6 +2506,7 @@ class HymnsView extends ItemView {
     this.mode = 'list';
     this.listWrap.style.display = '';
     this.viewerWrap.style.display = 'none';
+    this.applyResponsiveColumns();
     // 离开查看模式：同时释放 pdf.js 文档与画布（显式释放显存），并作废在途渲染
     this.disposePdfDoc();
     this.disposePdfCanvases();
@@ -2278,6 +2521,23 @@ class HymnsView extends ItemView {
     this.page = 0;
     this.selectedIndex = -1;
     this.renderList();
+  }
+
+  /* 一键清空搜索框：清空后立刻回到列表，并把光标留在搜索框方便接着输入 */
+  clearQuery() {
+    if (this.searchEl) this.searchEl.value = '';
+    this.query = '';
+    if (this._jumpBack) { this._jumpBack = null; this._jumpUid = null; this.showBackBtn(false); }
+    this.page = 0;
+    this.selectedIndex = -1;
+    this.renderList();
+    if (this.searchEl) this.searchEl.focus();
+  }
+  /* 清空按钮只在搜索框里有内容时出现 */
+  updateClearBtn() {
+    if (!this.clearBtn) return;
+    const has = !!((this.searchEl && this.searchEl.value) || this.query);
+    this.clearBtn.style.display = has ? '' : 'none';
   }
 
   onKey(e) {
@@ -2456,14 +2716,26 @@ class HymnsView extends ItemView {
   renderList(keepScroll) {
     if (!this.resultsEl) return;
     this.resultsEl.empty();
+    // 注意：不要在这里销毁「最近打开 / 播放列表」。双列模式下它已被搬到右列，
+    // 与左列（resultsEl）是两套容器；若每次重渲左列都销毁重建它，节点被替换的瞬间
+    // 正在点击的头部就会丢事件（表现为“有时点不动”）。它一旦建好就稳定保留，
+    // 由 renderHomeSections 的守卫避免重复创建、由 placeHomeSections 负责归位。
     this.visibleItems = [];
     if (this.countEl) {
       const nLy = Object.keys(this.plugin.lyrics || {}).length;
       this.countEl.setText('· 共 ' + this.hymns.length + ' 首' + (nLy ? ('（歌词 ' + nLy + '）') : '（无歌词索引）'));
     }
+    this.updateClearBtn();   // 搜索框里有内容才显示清空按钮
 
     const list = this.computeList();
     if (list === null) { this.renderHome(); return; }
+    // 双列模式下：即使正在搜索 / 浏览某个分类，「最近打开 / 播放列表」也固定显示在右列顶部。
+    // 已存在就原地复用（只确保它在右列的正确位置），不重建，避免点击丢失与闪烁。
+    if (this.isWideEnough()) {
+      this._sectionsInHome = false;
+      if (!this.homeSections || !this.homeSections.isConnected) this.renderHomeSections();
+      else this.placeHomeSections();
+    }
     // 切换分类/搜索/翻页都只是“浏览”，不改动当前播放列表
     this.setBrowseList(list);
 
@@ -2546,16 +2818,59 @@ class HymnsView extends ItemView {
     this.openDropdown(this.pageNumBtn, cells, { grid: true });
   }
 
+  /* 「最近打开」与「播放列表」两块：装进一个独立容器，便于整体搬移。
+     双列模式下固定显示在右列顶部（首页、搜索、分类浏览都一样）；
+     单列模式下只有在首页才留在结果列表里，位置与侧边栏一致。 */
+  renderHomeSections(recents, playlists) {
+    // 已建好且还在页面上 → 原地复用，不重建（避免节点被替换导致点击丢失、也避免闪烁）
+    if (this.homeSections && this.homeSections.isConnected) return this.homeSections;
+    if (this.homeSections) this.homeSections = null;
+    if (!recents) recents = this.plugin.recent.map((c) => this.plugin.resolveHymn(c)).filter(Boolean);
+    if (!playlists) playlists = this.plugin.playlists;
+    // 同一首可能既以 uid 又以编号记过一次，解析后按 uid 去重，列表里不出现重复项
+    const seen = new Set();
+    recents = recents.filter((h) => { if (seen.has(h.uid)) return false; seen.add(h.uid); return true; });
+    if (!recents.length && !playlists.length) return null;
+    this.homeSections = this.resultsEl.createDiv({ cls: 'hymns-home-sections' });
+    // 记录两支填充函数，供 refreshHomeSections 在原地刷新内容（不重建整块）
+    this._recentFill = (body) => {
+      const rs = this.plugin.recent.map((c) => this.plugin.resolveHymn(c)).filter(Boolean);
+      const s = new Set();
+      rs.filter((h) => { if (s.has(h.uid)) return false; s.add(h.uid); return true; })
+        .forEach((h) => body.appendChild(this.renderItem(h)));
+    };
+    this._playlistFill = (body) => {
+      this.plugin.playlists.forEach((pl) => this.renderPlaylistRow(body, pl));
+    };
+    // 最近打开（默认折叠）
+    if (recents.length) {
+      this.renderCollapsible('🕘 最近打开', true, (body) => this._recentFill(body), this.homeSections);
+    }
+    // 播放列表（默认折叠）：点歌单是“展开看看里面有哪些诗歌”，想整单播放请点该行右侧的 ▶
+    if (playlists.length) {
+      this.renderCollapsible('🎵 播放列表', true, (body) => this._playlistFill(body), this.homeSections);
+    }
+    this.placeHomeSections();
+    return this.homeSections;
+  }
+
   renderHome() {
     // 首页（全部诗歌）：底部页码栏在此视图无意义，隐藏
     if (this.pagerEl) this.pagerEl.style.display = 'none';
     this.pageKeys = [];
     this.pageCount = 1;
 
-    // 一首都没扫到时：直接给出原因与“打开设置”入口，而不是只显示一片空白
+    // 一首都没扫到时：直接给出原因与“打开设置”入口，而不是只显示一片空白。
+    // 索引还没扫完（刚启动、面板先于扫描建好）时先说“正在扫描”，
+    // 免得一上来就误报“没扫描到”——扫完会自动重画。
     if (!this.hymns.length) {
+      const scanning = !this.plugin._indexBuilt;
       const box = this.resultsEl.createDiv({ cls: 'hymns-empty-guide' });
-      box.createDiv({ cls: 'hymns-empty-guide-title', text: '还没有扫描到任何诗歌 PDF' });
+      box.createDiv({ cls: 'hymns-empty-guide-title', text: scanning ? '正在扫描诗歌 PDF…' : '还没有扫描到任何诗歌 PDF' });
+      if (scanning) {
+        box.createDiv({ text: '首次打开会扫描整个仓库的 PDF/MP3，扫描完成后本页会自动显示诗歌列表。' });
+        return;
+      }
       box.createDiv({ text: '诗歌靠“文件名编号”识别（如 D116、E836（补充版））。请到设置里把「PDF 文件夹」留空（即扫描整个仓库），或用「自动检测」一键定位。' });
       const b = box.createEl('button', { cls: 'mod-cta', text: '打开插件设置' });
       b.addEventListener('click', () => this.plugin.openPluginSettings());
@@ -2581,28 +2896,21 @@ class HymnsView extends ItemView {
       card.addEventListener('click', () => this.setCat(letter));
     });
 
-    // 最近打开（默认折叠）
-    if (recents.length) {
-      this.renderCollapsible('🕘 最近打开', true, (body) => {
-        recents.forEach((h) => body.appendChild(this.renderItem(h)));
-      });
-    }
-    // 播放列表（默认折叠）：点歌单是“展开看看里面有哪些诗歌”，想整单播放请点该行右侧的 ▶
-    if (playlists.length) {
-      this.renderCollapsible('🎵 播放列表', true, (body) => {
-        playlists.forEach((pl) => this.renderPlaylistRow(body, pl));
-      });
-    }
+    // 最近打开 / 播放列表：双列模式下要固定显示在右列顶部，
+    // 所以先装进一个独立容器，便于整体搬移（单列时留在列表里，位置不变）。
+    this._sectionsInHome = true;
+    const hasSections = !!this.renderHomeSections(recents, playlists);
 
-    if (!recents.length && !playlists.length && !cardWrap.childElementCount) {
+    if (!hasSections && !cardWrap.childElementCount) {
       this.resultsEl.createDiv({ cls: 'hymns-empty', text: '点击上方分类卡片浏览诗歌；\n或在搜索框输入编号(如 D116)或关键词(如 恩典 耶稣)开始搜索。' });
     }
     this.resultsEl.scrollTop = 0;
   }
 
-  /* 可折叠区块：标题栏可点击展开/收起；startCollapsed=true 时默认折叠 */
-  renderCollapsible(title, startCollapsed, fillBody) {
-    const section = this.resultsEl.createDiv({ cls: 'hymns-collapsible' });
+  /* 可折叠区块：标题栏可点击展开/收起；startCollapsed=true 时默认折叠。
+     host 可选，指定挂载到哪个容器（默认结果列表；「最近打开 / 播放列表」在双列模式下挂右列）。 */
+  renderCollapsible(title, startCollapsed, fillBody, host) {
+    const section = (host || this.resultsEl).createDiv({ cls: 'hymns-collapsible' });
     const head = section.createDiv({ cls: 'hymns-collapsible-head' });
     head.createSpan({ cls: 'hymns-collapsible-title', text: title });
     const caret = head.createSpan({ cls: 'hymns-collapsible-caret' });
@@ -2615,7 +2923,11 @@ class HymnsView extends ItemView {
       head.classList.toggle('is-open', open);
     };
     apply();
-    head.addEventListener('click', () => { open = !open; apply(); });
+    head.addEventListener('click', () => {
+      open = !open; apply();
+      // 现在「最近打开 / 播放列表」是 .hymns-col-top 里的正常流元素，展开后由 .hymns-col-top 自然出滑条，
+      // 无需再手动限高（那是之前绝对定位浮层时代的兜底，已废弃）。
+    });
     fillBody(body);
     return section;
   }
@@ -2653,14 +2965,17 @@ class HymnsView extends ItemView {
         built = true;
         const list = pl.codes.map((c) => this.plugin.resolveHymn(c)).filter(Boolean);
         if (!list.length) body.createDiv({ cls: 'hymns-note', text: '这个播放列表里还没有诗歌。' });
-        else list.forEach((h) => body.appendChild(this.renderItem(h)));
+        // 带上歌单上下文：此后预览里翻页、以及点播放，都限定在这个歌单之内
+        else list.forEach((h) => body.appendChild(this.renderItem(h, { list, name: pl.name })));
       }
       apply();
     });
     return wrap;
   }
 
-  renderItem(h) {
+  /* ctx 可选：{ list, name } —— 这一行所属的集合（如某个播放列表）。
+     传了之后：点开预览 → 上/下一首只在这个集合内翻；点播放 → 把这个集合设为当前播放列表。 */
+  renderItem(h, ctx) {
     const el = document.createElement('div');
     el.classList.add('hymns-item');
     el.dataset.uid = h.uid;
@@ -2698,7 +3013,7 @@ class HymnsView extends ItemView {
     if (h.mp3Path) {
       const playBtn = actions.createEl('button', { cls: 'hymns-icon-btn', attr: { 'aria-label': '播放' } });
       setIcon(playBtn, 'play');
-      playBtn.addEventListener('click', (e) => { e.stopPropagation(); this.playFromList(h); });
+      playBtn.addEventListener('click', (e) => { e.stopPropagation(); this.playFromContext(h, ctx); });
     }
     const add = actions.createEl('button', { cls: 'hymns-icon-btn', attr: { 'aria-label': '加入播放列表' } });
     setIcon(add, 'list-plus');
@@ -2735,7 +3050,7 @@ class HymnsView extends ItemView {
     el.addEventListener('click', () => {
       if (lpFired) { lpFired = false; return; }
       if (timer) clearTimeout(timer);
-      timer = setTimeout(() => this.openInViewer(h), 220);
+      timer = setTimeout(() => this.openInViewer(h, ctx), 220);
     });
     el.addEventListener('dblclick', () => {
       if (timer) clearTimeout(timer);
@@ -2997,16 +3312,26 @@ class HymnsView extends ItemView {
       : '这个环境复制不了文件本身，已复制文件位置：' + abs);
   }
 
-  /* ---- 查看模式（侧边栏内显示 PDF） ---- */
-  openInViewer(h) {
+  /* ---- 查看模式（侧边栏内显示 PDF） ----
+     ctx 可选：{ list, name } 表示“从某个集合（如播放列表）里点开的这首”。
+     传入时把该集合设为正在浏览的列表 → 预览里上/下一首就在这个集合内翻，播放也按这个集合走。
+     不传时：若正在浏览的列表里根本没有这首（例如上一次的歌单上下文已不适用），退回全部诗歌。 */
+  openInViewer(h, ctx) {
     // 查看 PDF 仅用于“查阅”：只切换正在浏览的列表与当前查看的诗歌，
     // 绝不改动当前播放列表（currentSequence），也不改动播放指针（activeHymn/activeIndex）。
-    if (!this.currentList.length) this.setBrowseList(this.hymns.slice());
+    if (ctx && ctx.list && ctx.list.length) this.setBrowseList(ctx.list, ctx.name);
+    else if (!(this.currentList || []).some((x) => x.uid === h.uid)) this.setBrowseList(this.hymns.slice());
     this.viewHymn = h;
+    // 预览（打开 PDF 查阅）也算“打开过”，计入最近打开，退出预览回到列表即可看到
+    this.plugin.addRecent(h);
+    // 双列模式下「最近打开」就摆在右列（预览时也可见），立刻刷新，
+    // 不用等退出预览才看到这一首；单列时列表被 PDF 盖住，等退出再刷新即可
+    if (this.isWideEnough()) this.refreshHomeSections();
     this.viewIndex = Math.max(0, this.currentList.findIndex((x) => x.uid === h.uid));
     this.mode = 'viewer';
     this.listWrap.style.display = 'none';
     this.viewerWrap.style.display = '';
+    this.applyResponsiveColumns();
     this.renderViewer();
     // 焦点交给查看器：刚点进来的用户随后按 P 就能直接投影
     try { this.viewerWrap.focus({ preventScroll: true }); } catch (e) { /* ignore */ }
@@ -3036,15 +3361,21 @@ class HymnsView extends ItemView {
     // 顶部工具栏：只保留标题（翻页/关闭按钮已移到 PDF 下方）
     this.viewerToolbar.empty();
     this.viewerToolbar.createSpan({ cls: 'hymns-viewer-title', text: hymnLabel(h) });
+    // 从某个歌单进来时，标题右侧标出“正在这个歌单里翻页（第几首/共几首）”，免得翻页范围不明
+    if (this.browseName && (this.currentList || []).length) {
+      const ci = this.currentList.findIndex((x) => x.uid === h.uid);
+      const pos = ci >= 0 ? '（' + (ci + 1) + '/' + this.currentList.length + '）' : '';
+      this.viewerToolbar.createSpan({ cls: 'hymns-viewer-ctx', text: '🎵 ' + this.browseName + pos });
+    }
 
     this.renderViewerPdf(h);
 
     // 底部操作区：上一首 / 下一首 → 播放 / 加入播放列表 / 打开PDF / 复制 → 关闭
     this.viewerActions.empty();
-    const prev = this.viewerActions.createEl('button', { cls: 'hymns-icon-btn', attr: { 'aria-label': '上一首' } });
+    const prev = this.viewerActions.createEl('button', { cls: 'hymns-icon-btn', attr: { 'aria-label': '上一首' + (this.browseName ? '：' + this.browseName : '') } });
     setIcon(prev, 'chevron-left');
     prev.addEventListener('click', () => this.viewerStep(-1));
-    const next = this.viewerActions.createEl('button', { cls: 'hymns-icon-btn', attr: { 'aria-label': '下一首' } });
+    const next = this.viewerActions.createEl('button', { cls: 'hymns-icon-btn', attr: { 'aria-label': '下一首' + (this.browseName ? '：' + this.browseName : '') } });
     setIcon(next, 'chevron-right');
     next.addEventListener('click', () => this.viewerStep(1));
 
@@ -3063,6 +3394,10 @@ class HymnsView extends ItemView {
     const close = this.viewerActions.createEl('button', { cls: 'hymns-icon-btn', attr: { 'aria-label': '关闭 PDF' } });
     setIcon(close, 'x');
     close.addEventListener('click', () => this.closeViewer());
+
+    // 预览工具栏最右侧：在新标签页打开（列表模式下标题栏那个按钮会随列表一起隐藏，
+    // 这里补一个，保证预览状态下也能随时另开标签页）
+    this.createNewTabButton(this.viewerToolbar);
   }
 
   /* 释放 PDF 画布：必须先把宽高显式置 0，让 Chromium 立即回收 GPU 纹理，再从 DOM 移除。
@@ -3242,11 +3577,23 @@ class HymnsView extends ItemView {
   }
 
   /* ---- 播放 ---- */
+  /* 从某个集合（播放列表等）里主动播放：先把该集合设为“正在浏览的列表”，
+     这样它随即成为当前播放列表，播放栏的上/下一首也就顺着这个歌单走。 */
+  playFromContext(h, ctx) {
+    if (ctx && ctx.list && ctx.list.length) this.setBrowseList(ctx.list, ctx.name);
+    this.playFromList(h);
+  }
   /* 用户主动点“播放”：把“正在浏览的列表”设为当前播放列表，并从该首开始播放。 */
   async playFromList(h) {
     let list = this.currentList;
     if (!list || !list.length) list = this.hymns.slice();
+    const before = (this.plugin.currentSequence || []).join('|');
     this.setCurrentList(list);                                  // 只有主动播放才更新当前播放列表
+    // 从歌单里播放时明确告知当前播放列表换成了哪个歌单（内容没变时不重复提示）
+    const after = (this.plugin.currentSequence || []).join('|');
+    if (this.browseName && before !== after) {
+      new Notice('当前播放列表：' + this.browseName + '（' + list.length + ' 首）');
+    }
     this.activeIndex = Math.max(0, list.findIndex((x) => x.uid === h.uid));
     this.activeHymn = h;
     await this.playHymn(h);
@@ -3274,7 +3621,8 @@ class HymnsView extends ItemView {
       await this.audioEl.play();
       if (token !== this._audioToken) return;               // play() 期间又被切歌
       this.nowEl.setText(hymnLabel(h));
-      this.plugin.addRecent(h.uid);
+      this.plugin.addRecent(h);
+      if (this.isWideEnough()) this.refreshHomeSections();
     } catch (e) {
       if (token !== this._audioToken) return;               // 被新播放打断的 reject 不算错误
       new Notice('播放失败：' + e.message);
@@ -3285,7 +3633,7 @@ class HymnsView extends ItemView {
     const f = this.app.vault.getAbstractFileByPath(h.pdfPath);
     if (!(f instanceof TFile)) { new Notice('未找到 PDF：' + h.pdfPath); return; }
     this.app.workspace.getLeaf(true).openFile(f);
-    this.plugin.addRecent(h.code);
+    this.plugin.addRecent(h);
   }
 
   /* ---- 导航（切歌）：只在“当前播放列表”内移动，与正在浏览的列表无关 ---- */
@@ -3383,7 +3731,7 @@ class HymnsPlugin extends Plugin {
     this.addRibbonIcon('music', '打开诗歌 Hymns', () => this.activateView());
     this.addCommand({ id: 'open-hymns-view', name: '打开诗歌面板', callback: () => this.activateView() });
     this.addCommand({ id: 'rebuild-hymns-index', name: '重建诗歌（PDF/MP3）索引', callback: async () => {
-      await this.buildIndex(); if (this.view) this.view.renderListMode();
+      await this.buildIndex(); this.refreshAllViews();
       if (!this.hymns.length || !this.mp3Count) this.showNoMediaNotice();
       new Notice('诗歌索引已重建，共 ' + this.hymns.length + ' 首');
     } });
@@ -3407,7 +3755,8 @@ class HymnsPlugin extends Plugin {
       if (!this.hymns.length || !this.mp3Count) {
         this.showNoMediaNotice();
       }
-      if (this.view) this.view.renderListMode();
+      // 索引与歌词都就绪后，把侧边栏和标签页一并刷新，两边都能立刻用
+      this.refreshAllViews();
       // 插件已成功加载 → 上一轮更新留下的 .old 回滚备份已完成使命，清理掉，避免目录里堆一堆备份文件
       this.cleanOldBackups();
       // 启动后自动检测更新（每次启动都检查，仅受 settings.autoCheckUpdate 控制）
@@ -3670,7 +4019,7 @@ class HymnsPlugin extends Plugin {
       // 静默且无变化 → 完全不打扰；否则（手动或确有新增）照常提示
       if (!(silent && !changed)) new Notice(summary, failed ? 9000 : 6000);
       if (failed) console.warn('[Hymns] 歌词抽取失败清单：', failures);
-      if (this.view) this.view.renderListMode();
+      this.refreshAllViews();
     } catch (e) {
       if (notice) notice.hide();
       console.error('[Hymns] 歌词索引生成失败', e);
@@ -4299,13 +4648,60 @@ class HymnsPlugin extends Plugin {
     return sections;
   }
 
-  /* ---- 最近 ---- */
-  addRecent(code) {
-    this.recent = [code, ...this.recent.filter((c) => c !== code)].slice(0, 20);
+  /* ---- 最近 ----
+     统一按 uid 记录：传诗歌对象或 uid / 编号都可以。
+     以前播放时存 uid、在主区打开时存编号，同一首会被记成两条，
+     解析后还会重复出现，所以这里统一成 uid 后再去重。 */
+  addRecent(hymnOrId) {
+    const id = (hymnOrId && hymnOrId.uid) ? hymnOrId.uid : hymnOrId;
+    if (!id) return;
+    const target = this.resolveHymn(id);
+    const targetUid = target ? target.uid : id;
+    const seen = new Set([targetUid]);
+    const out = [id];
+    for (const c of this.recent) {
+      if (c === id) continue;
+      const h = this.resolveHymn(c);
+      const uid = h ? h.uid : c;
+      if (seen.has(uid)) continue;      // 与本次是同一首（uid 不同写法）→ 丢弃旧记录
+      seen.add(uid);
+      out.push(c);
+    }
+    this.recent = out.slice(0, 20);
     this.saveAll();
   }
 
   /* ---- 打开视图 ---- */
+  /* 刷新所有已打开的诗歌面板（侧边栏和标签页可能同时开着）。
+     别再只刷 plugin.view——它只指向最后打开的那一个面板。
+     启动时的真实顺序是：Obsidian 先按上次的布局把面板建好（那时索引还没扫，面板显示“没扫描到”），
+     再走 onLayoutReady 扫描索引。只刷一个面板的话，另一个就永远停在空状态，
+     必须关掉重开才会正常——这正是“标签页空白、侧边栏正常”的原因。 */
+  refreshAllViews(keepScroll) {
+    try {
+      const ws = this.app && this.app.workspace;
+      const leaves = ws ? (ws.getLeavesOfType(VIEW_TYPE_HYMNS) || []) : [];
+      leaves.forEach((leaf) => {
+        const v = leaf && leaf.view;
+        if (!v || typeof v.renderListMode !== 'function') return;
+        if (v.mode === 'viewer') return;      // 正在预览 PDF 的面板不打断
+        try { v.renderListMode(keepScroll); } catch (e) { console.error('[Hymns] 刷新面板失败', e); }
+      });
+    } catch (e) { /* 刷新失败不影响主流程 */ }
+  }
+
+  /* 在新标签页打开诗歌面板（侧边栏那个可以留着，两边互不干扰）。
+     getLeaf('tab') 需要较新版本的 Obsidian；老版本只认布尔参数，
+     传 'tab' 会被当成“新建分栏”，所以取不到时退回 getLeaf(true)。 */
+  async openHymnsInNewTab() {
+    const ws = this.app.workspace;
+    let leaf = null;
+    try { leaf = ws.getLeaf('tab'); } catch (e) { leaf = null; }
+    if (!leaf) leaf = ws.getLeaf(true);
+    if (!leaf) return;
+    await leaf.setViewState({ type: VIEW_TYPE_HYMNS, active: true });
+    ws.revealLeaf(leaf);
+  }
   async activateView() {
     const { workspace } = this.app;
     let leaf = workspace.getLeavesOfType(VIEW_TYPE_HYMNS)[0];

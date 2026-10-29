@@ -67,7 +67,7 @@ console.log('versions.json -> 追加 ' + version + ' -> ' + minApp);
 
 // 3. git 提交 + 打 tag + 推送
 try {
-  execSync('git add manifest.json versions.json main.js', { cwd: root, stdio: 'inherit' });
+  execSync('git add manifest.json versions.json main.js styles.css README.md CHANGELOG.md', { cwd: root, stdio: 'inherit' });
   execSync('git commit -m "Release ' + version + '"', { cwd: root, stdio: 'inherit' });
 } catch (e) {
   console.error('提交失败（可能无改动被提交，可忽略）:', e.message);
