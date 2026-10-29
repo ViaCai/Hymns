@@ -191,6 +191,13 @@ const CHANGELOG_CONTENT = {
 - **修好了「最近打开 / 播放列表」有时点不动的问题**
   以前在右侧这一块，有时点「最近打开」或「播放列表」没反应、有时又有反应。原因是左侧列表每次刷新都会把这一块重建一遍，刷新刚好撞上你点击的瞬间，这次点击就被丢掉了。现在这一块建好就稳定保留、原地刷新，不再被重建，点一下就能稳定展开 / 收起。`,
 
+  '2.0.3': `## [2.0.3] - 2026-10-30
+
+### 本次更新
+- **检查到新版本时可以直接一键更新了**
+  以前在设置里点「立即检查更新」，只会告诉你“有新版本”，却没法直接更新，只能自己去下载。现在发现有新版本时，弹出来的更新说明窗口右下角会有一个「立即更新到 vX」按钮，点一下就自动下载安装，装完提示重启 Obsidian 即可。
+  启动时右上角那条“有可用更新”的通知，点开后同样可以一键更新。`,
+
   '2.0.2': `## [2.0.2] - 2026-10-30
 
 ### 修复
@@ -1249,6 +1256,9 @@ class HymnsUpdateModal extends Modal {
     this.content = content || '';
     this.title = opts.title || '';
     this.historyOnly = !!opts.historyOnly;
+    // updatable=true 表示“检测到新版本、还没装”：底部显示「立即更新」按钮。
+    // 更新完成后的“已更新至 vX”弹窗、查看当前版本说明等场景不传这个标记，不显示按钮。
+    this.updatable = !!opts.updatable;
   }
   onOpen() {
     const { contentEl } = this;
@@ -1293,7 +1303,7 @@ class HymnsUpdateModal extends Modal {
       }
     }
 
-    // 按钮区：查看历史更新 + 知道了
+    // 按钮区：查看历史更新 +（有更新可用时）立即更新 + 知道了
     const btnWrap = contentEl.createDiv();
     btnWrap.style.display = 'flex';
     btnWrap.style.justifyContent = 'space-between';
@@ -1302,7 +1312,14 @@ class HymnsUpdateModal extends Modal {
     btnWrap.style.marginTop = '20px';
     const historyBtn = btnWrap.createEl('button', { text: '查看历史更新' });
     historyBtn.addEventListener('click', () => { this.close(); this.plugin.showUpdateHistory(); });
-    const okBtn = btnWrap.createEl('button', { cls: 'mod-cta', text: '知道了' });
+    const rightWrap = btnWrap.createDiv();
+    rightWrap.style.display = 'flex';
+    rightWrap.style.gap = '8px';
+    if (this.updatable && this.version && typeof this.plugin.performUpdate === 'function') {
+      const updBtn = rightWrap.createEl('button', { cls: 'mod-cta', text: '立即更新到 v' + this.version });
+      updBtn.addEventListener('click', () => { this.close(); this.plugin.performUpdate(this.version); });
+    }
+    const okBtn = rightWrap.createEl('button', { text: '知道了' });
     okBtn.addEventListener('click', () => this.close());
   }
 
@@ -4578,7 +4595,7 @@ class HymnsPlugin extends Plugin {
       if (this.compareVersion(latest, current) > 0) {
         if (manual) {
           const changelog = await this.getChangelogFor(latest);
-          new HymnsUpdateModal(this.app, this, latest, changelog, { title: 'Hymns 有可用更新 v' + latest }).open();
+          new HymnsUpdateModal(this.app, this, latest, changelog, { title: 'Hymns 有可用更新 v' + latest, updatable: true }).open();
         } else {
           // 自动检查每次启动都执行：只要发现新版本就在右上角弹出更新通知
           // （不再因用户此前点过「稍后」而静默跳过；同一会话内同一版本只弹一次）
@@ -4630,7 +4647,7 @@ class HymnsPlugin extends Plugin {
 
     const openDetail = async () => {
       const changelog = await this.getChangelogFor(latestVersion);
-      new HymnsUpdateModal(this.app, this, latestVersion, changelog, { title: '📢 Hymns 有可用更新 v' + latestVersion }).open();
+      new HymnsUpdateModal(this.app, this, latestVersion, changelog, { title: '📢 Hymns 有可用更新 v' + latestVersion, updatable: true }).open();
     };
     // 点击整块正文即打开详情（引导用户去更新）
     wrap.addEventListener('click', (e) => { if (e.target === wrap || e.target === titleEl || e.target === descEl) openDetail(); });
