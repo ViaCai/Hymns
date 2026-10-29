@@ -190,6 +190,15 @@ const CHANGELOG_CONTENT = {
   以前这块外面套了两层框，看起来重重的，现在只保留里面各自的边框。
 - **修好了「最近打开 / 播放列表」有时点不动的问题**
   以前在右侧这一块，有时点「最近打开」或「播放列表」没反应、有时又有反应。原因是左侧列表每次刷新都会把这一块重建一遍，刷新刚好撞上你点击的瞬间，这次点击就被丢掉了。现在这一块建好就稳定保留、原地刷新，不再被重建，点一下就能稳定展开 / 收起。`,
+
+  '2.0.1': `## [2.0.1] - 2026-10-29
+
+### 修复
+- **修好了手机上「浮动侧边栏打开后一片空白」的问题**
+  在手机上，如果侧边栏没有固定在屏幕上（是浮动的、用手划出来那种），有时打开后里面是空的、看不到任何诗歌。有两种情形都会触发：
+    - 点侧边栏右上角的「在新标签页打开」之后
+    - 把侧边栏划掉、再划出来之后
+  现在这两种情况都会正常显示诗歌列表，不会再变成空白。`,
 };
 
 /* ============ 工具函数 ============ */
@@ -1940,7 +1949,19 @@ class HymnsView extends ItemView {
   getDisplayText() { return '诗歌 Hymns'; }
   getIcon() { return 'music'; }
 
+  /* 打开视图：重置状态并把整个界面重建一遍。
+     构建逻辑抽到 buildLayout()，因为移动端浮动（抽屉）侧边栏在关闭时会 detach 并触发 onClose
+     清空 contentEl，重新划出时 Obsidian 未必会重跑 onOpen —— 那时面板会空白。
+     buildLayout() 可被 onOpen 与“空白补重建”复用，内部持久事件做了幂等处理。 */
   async onOpen() {
+    this.buildLayout();
+    this.renderListMode();
+  }
+
+  /* 重建/首次构建整个界面 DOM（等价于 onOpen 的构建部分）。
+     绑定在 containerEl / document 上的持久事件不走 registerDomEvent，
+     改由 _wirePersistentEvents() 用“先移除再添加”保证可重复调用而不堆积。 */
+  buildLayout() {
     this.query = '';
     this.catFilter = null;
     this.currentList = [];
@@ -1962,6 +1983,8 @@ class HymnsView extends ItemView {
     this.isPlaying = false;
     this._jumpBack = null;   // 长按跳转的返回点：{query, catFilter, page, scrollTop}
     this._jumpUid = null;    // 长按跳转后需要高亮显示的诗歌 uid
+
+    this._layoutKey = null; // 重置响应式布局缓存，保证重建时重新计算（与初次 onOpen 一致）
 
     const root = this.contentEl;
     root.empty();
@@ -2048,9 +2071,6 @@ class HymnsView extends ItemView {
     this.viewerBody.addEventListener('pointerdown', () => {
       try { this.viewerWrap.focus({ preventScroll: true }); } catch (e) { /* ignore */ }
     });
-    // P 键 = 投影当前正在预览的这首诗歌（仅在预览模式下、且焦点在本视图内时生效）
-    this.registerDomEvent(this.containerEl.ownerDocument, 'keydown', (e) => this.onProjectionHotkey(e), true);
-    this.registerDomEvent(this.containerEl.ownerDocument, 'keydown', (e) => this.onFullscreenHotkey(e), true);
 
     // 播放栏（固定）
     this.buildPlayer(root);
@@ -2064,13 +2084,48 @@ class HymnsView extends ItemView {
     this.bindResponsiveColumns();
     this.applyResponsiveColumns();
 
-    // 侧边栏与标签页可能同时开着：点哪个面板，就以哪个为“当前视图”，
-    // 免得在侧边栏里点播放列表，结果跑到另一个面板去打开。
-    this.registerDomEvent(this.containerEl, 'pointerdown', () => {
-      if (this.plugin) this.plugin.view = this;
-    }, true);
+    // 绑定在 containerEl / document 上的持久事件（P 投影 / 全屏 / 面板聚焦），
+    // 注意：不随 contentEl.empty() 消失，所以用幂等方式单独绑定（见 _wirePersistentEvents）。
+    this._wirePersistentEvents();
+  }
 
-    this.renderListMode();
+  /* 绑定在 containerEl / document 上的持久事件（不随 contentEl.empty() 消失）。
+     用“先移除再添加”做幂等，保证 onOpen 与空白补重建反复调用时不会堆积监听器。 */
+  _wirePersistentEvents() {
+    try {
+      const doc = this.containerEl && this.containerEl.ownerDocument;
+      if (!this._onPointerDown) {
+        this._onPointerDown = () => { if (this.plugin) this.plugin.view = this; };
+      }
+      if (!this._onProjKey) {
+        this._onProjKey = (e) => this.onProjectionHotkey(e);
+      }
+      if (!this._onFullKey) {
+        this._onFullKey = (e) => this.onFullscreenHotkey(e);
+      }
+      this.containerEl.removeEventListener('pointerdown', this._onPointerDown, true);
+      this.containerEl.addEventListener('pointerdown', this._onPointerDown, true);
+      if (doc) {
+        doc.removeEventListener('keydown', this._onProjKey, true);
+        doc.addEventListener('keydown', this._onProjKey, true);
+        doc.removeEventListener('keydown', this._onFullKey, true);
+        doc.addEventListener('keydown', this._onFullKey, true);
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  /* 移动端抽屉侧边栏：关闭→划出过程中，若本面板被清空却没重跑 onOpen，这里补一次完整重建。
+     仅在“面板确实空白且当前可见”时动手，避免对正常面板或隐藏面板做无用功。 */
+  tryRebuildIfBlank() {
+    try {
+      if (!this.contentEl || this.contentEl.childElementCount > 0) return;  // 已有内容，跳过
+      if (this.mode === 'viewer') return;                                   // 正在看 PDF 的不抢
+      // 只补“已挂载到文档、但被清空”的面板：抽屉重新划出后若没重跑 onOpen 就会命中这里。
+      // 用 isConnected 而非 offsetHeight：后者在抽屉动画/测量时机下容易误判为 0 而漏建。
+      if (!this.containerEl || !this.containerEl.isConnected) return;
+      this.buildLayout();
+      this.renderListMode();
+    } catch (e) { console.error('[Hymns] 补重建空白面板失败', e); }
   }
 
   /* ---- 在新标签页打开 ---- */
@@ -2362,6 +2417,15 @@ class HymnsView extends ItemView {
         .map((l) => l.view).find((v) => v && v !== this);
       this.plugin.view = other || null;
     }
+    // 解绑持久事件，避免视图销毁后监听器泄漏（与 buildLayout 里的 _wirePersistentEvents 对应）
+    try {
+      if (this._onPointerDown) this.containerEl.removeEventListener('pointerdown', this._onPointerDown, true);
+    } catch (e) { /* ignore */ }
+    try {
+      const doc = this.containerEl && this.containerEl.ownerDocument;
+      if (doc && this._onProjKey) doc.removeEventListener('keydown', this._onProjKey, true);
+      if (doc && this._onFullKey) doc.removeEventListener('keydown', this._onFullKey, true);
+    } catch (e) { /* ignore */ }
     this.contentEl.empty();
   }
 
@@ -3739,6 +3803,10 @@ class HymnsPlugin extends Plugin {
       await this.rebuildLyrics(false);
     } });
 
+    // 移动端抽屉（浮动）侧边栏划出时，被清空的面板可能不重跑 onOpen 而空白；
+    // 监听布局变化，对空白且可见的面板补一次重建（ensureViewsNotBlank → tryRebuildIfBlank）。
+    this.registerEvent(this.app.workspace.on('layout-change', () => this.ensureViewsNotBlank()));
+
     this.app.workspace.onLayoutReady(async () => {
       await this.buildIndex();
       await this.loadLyrics();
@@ -4690,6 +4758,22 @@ class HymnsPlugin extends Plugin {
     } catch (e) { /* 刷新失败不影响主流程 */ }
   }
 
+  /* 移动端抽屉侧边栏：关闭→划出时，被清空的面板若没重跑 onOpen 会变空白。
+     这里在“布局变化”时检查每个 Hymns 面板：空白且可见就补一次完整重建（见视图的 tryRebuildIfBlank）。
+     contentEl 有内容的正常面板会被 tryRebuildIfBlank 直接跳过，开销极小。 */
+  ensureViewsNotBlank() {
+    try {
+      const ws = this.app && this.app.workspace;
+      const leaves = ws ? (ws.getLeavesOfType(VIEW_TYPE_HYMNS) || []) : [];
+      leaves.forEach((leaf) => {
+        const v = leaf && leaf.view;
+        if (v && typeof v.tryRebuildIfBlank === 'function') {
+          try { v.tryRebuildIfBlank(); } catch (e) { /* ignore */ }
+        }
+      });
+    } catch (e) { /* ignore */ }
+  }
+
   /* 在新标签页打开诗歌面板（侧边栏那个可以留着，两边互不干扰）。
      getLeaf('tab') 需要较新版本的 Obsidian；老版本只认布尔参数，
      传 'tab' 会被当成“新建分栏”，所以取不到时退回 getLeaf(true)。 */
@@ -4701,6 +4785,10 @@ class HymnsPlugin extends Plugin {
     if (!leaf) return;
     await leaf.setViewState({ type: VIEW_TYPE_HYMNS, active: true });
     ws.revealLeaf(leaf);
+    // 移动端：从浮动侧边栏点“在新标签页打开”后，Obsidian 会把侧边栏的 leaf 隐藏 /
+    // 重建，面板内容可能被清空而留下空白。这里把所有 Hymns 面板再刷一遍，
+    // 保证侧边栏与刚开的标签页都正常渲染（索引重建时同样的刷新逻辑，安全）。
+    try { this.refreshAllViews(true); } catch (e) { /* 刷新失败不影响主流程 */ }
   }
   async activateView() {
     const { workspace } = this.app;
