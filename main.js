@@ -191,6 +191,16 @@ const CHANGELOG_CONTENT = {
 - **修好了「最近打开 / 播放列表」有时点不动的问题**
   以前在右侧这一块，有时点「最近打开」或「播放列表」没反应、有时又有反应。原因是左侧列表每次刷新都会把这一块重建一遍，刷新刚好撞上你点击的瞬间，这次点击就被丢掉了。现在这一块建好就稳定保留、原地刷新，不再被重建，点一下就能稳定展开 / 收起。`,
 
+  '2.0.2': `## [2.0.2] - 2026-10-30
+
+### 修复
+- **手机横屏也能用双列了**
+  以前手机横屏时窗口还是不够宽，标签页只能单列。现在只要手机是横着的，标签页就会自动变成双列（左边列表 / 预览，右边搜索、播放）。
+- **预览诗歌时，侧边栏收起再划出、浮动和固定之间切换，不再闪一下、也不会跳回第一页**
+  以前正在预览一首诗歌的 PDF 时，只要把侧边栏收起来再划出来（手机、电脑都一样），或者把侧边栏在浮动、固定之间切换，画面会闪一下，并且 PDF 会跑回第一页，要重新翻到刚才那页。现在这些操作都会稳稳停在你刚才看的那一页，画面也不再闪动。
+
+小提示：预览位置是按诗歌记住的——每首诗歌各自记住自己上次看到的地方，换一首再回来也能接上。`,
+
   '2.0.1': `## [2.0.1] - 2026-10-29
 
 ### 修复
@@ -1985,6 +1995,8 @@ class HymnsView extends ItemView {
     this._jumpUid = null;    // 长按跳转后需要高亮显示的诗歌 uid
 
     this._layoutKey = null; // 重置响应式布局缓存，保证重建时重新计算（与初次 onOpen 一致）
+    this._wasVisible = false; // 容器可见性跟踪：由隐藏变可见时用来触发滚动恢复（不重画）
+    this._pdfScrollTop = this._pdfScrollTop || 0; // 当前 PDF 的滚动位置（侧边栏收起/视图重建后用来恢复，不随 buildLayout 清零）
 
     const root = this.contentEl;
     root.empty();
@@ -2064,6 +2076,23 @@ class HymnsView extends ItemView {
     this.viewerBody = this.viewerWrap.createDiv({ cls: 'hymns-viewer-body' });
     this.viewerActions = this.viewerWrap.createDiv({ cls: 'hymns-viewer-actions' });
     this.bindViewerSwipe();
+    // 记录 PDF 的滚动位置：侧边栏被隐藏（display:none）时浏览器会把滚动清零，
+    // 这里在滚动发生时实时记下，收起再划出后才能恢复到原来那一页。
+    // 同时记「比例 top/scrollHeight」：宽度变化会让画布按 width:100% 缩放、总高度随之改变，
+    // 只有按比例恢复，浮动↔固定切换、转屏后才仍停在同一页（绝对像素会偏到别页）。
+    this.viewerBody.addEventListener('scroll', () => {
+      try {
+        const top = this.viewerBody.scrollTop;
+        const sh = this.viewerBody.scrollHeight;
+        this._pdfScrollTop = top;
+        if (this.viewHymn && this.plugin) {
+          const uid = this.viewHymn.uid;
+          if (this.plugin._pdfScroll) this.plugin._pdfScroll[uid] = top;
+          // 仅在可见且有高度时记比例；隐藏态 sh=0 会算出 NaN/0，不能覆盖有效记录
+          if (this.plugin._pdfScrollRatio && sh > 0) this.plugin._pdfScrollRatio[uid] = top / sh;
+        }
+      } catch (e) { /* ignore */ }
+    }, { passive: true });
 
     // 查看器容器可聚焦：点一下 PDF 区域，随后的键盘输入都落在这个视图里，
     // 这样按 P 才能稳定唤起投影（同时避免在笔记/搜索框里打字母 p 时误触发）。
@@ -2128,6 +2157,46 @@ class HymnsView extends ItemView {
     } catch (e) { console.error('[Hymns] 补重建空白面板失败', e); }
   }
 
+  /* 把 PDF 恢复到上次浏览到的位置（不重渲染，所以不会闪）。
+     优先按「比例 scrollTop/scrollHeight」恢复：宽度变化（浮动↔固定、转屏、拖窗口）会让画布
+     按 width:100% 缩放、总高度随之改变，用绝对像素会偏到别页，用比例才能稳定停在同一页。
+     hideWhileRestoring=true：由隐藏变可见时先把内容藏起来，等布局就绪再定位、最后显示，
+     彻底消除「display:none→可见瞬间先画一帧第一页」的闪。 */
+  restoreViewerScroll(hideWhileRestoring) {
+    try {
+      if (this.mode !== 'viewer' || !this.viewerBody) return;
+      const body = this.viewerBody;
+      const uid = this.viewHymn && this.viewHymn.uid;
+      const ratios = this.plugin && this.plugin._pdfScrollRatio;
+      const ratio = (uid && ratios && ratios[uid]) || 0;
+      const saved = (uid && this.plugin && this.plugin._pdfScroll && this.plugin._pdfScroll[uid]) || this._pdfScrollTop || 0;
+      if (!ratio && !saved) return;   // 本来就在顶部，无需处理
+      const targetOf = () => {
+        const sh = body.scrollHeight;
+        return ratio > 0 && sh > 0 ? Math.round(ratio * sh) : saved;
+      };
+      // 已基本就位就别动（避免无谓 hide/show 或滚动跳动）
+      if (Math.abs(body.scrollTop - targetOf()) <= 2 && body.style.visibility !== 'hidden') return;
+      if (hideWhileRestoring) body.style.visibility = 'hidden';
+      let tries = 0;
+      const apply = () => {
+        tries++;
+        // 容器还没真正可滚动（仍 display:none 或布局未就绪），下帧再试，最多约 0.5s
+        if ((body.scrollHeight <= 0 || body.offsetHeight <= 0) && tries < 30) {
+          if (typeof requestAnimationFrame === 'function') requestAnimationFrame(apply);
+          else setTimeout(apply, 16);
+          return;
+        }
+        try { body.scrollTop = targetOf(); } catch (e) { /* ignore */ }
+        body.style.visibility = '';
+      };
+      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(apply);
+      else setTimeout(apply, 16);
+    } catch (e) {
+      try { if (this.viewerBody) this.viewerBody.style.visibility = ''; } catch (e2) { /* ignore */ }
+    }
+  }
+
   /* ---- 在新标签页打开 ---- */
   /* 标题栏 / 预览工具栏右上角的纯符号按钮：点击后另开一个标签页显示本插件界面。
      只有侧边栏里才需要它——标签页 / 主区本身就是大面板，再开一个没有意义，故不创建。 */
@@ -2178,22 +2247,38 @@ class HymnsView extends ItemView {
   /* 容器尺寸变化：先决定单列还是双列；预览模式下再按新宽度重画 PDF
      （拖动窗口会连续触发，所以做防抖，只在停下后画一次）。 */
   onContainerResize() {
-    this.applyResponsiveColumns(true);
+    const cw = (this.containerEl && this.containerEl.clientWidth) || 0;
+    // 侧边栏收起 / 标签页切后台时容器被 display:none，clientWidth 变成 0，此时不处理。
+    if (cw <= 0) { this._wasVisible = false; return; }
+    const justShown = !this._wasVisible;
+    this._wasVisible = true;
+    // 只切换单列 / 双列布局（搬移工具条等 DOM），绝不因布局或宽度变化重画 PDF。
+    // PDF 画布是 width:100% 自适应的，宽度变了会自动缩放；重画会清空滚动容器再异步重建，
+    // 正是「浮动↔固定切换、转屏、拖窗口时闪一下并回到第一页」的元凶。
+    this.applyResponsiveColumns();
     if (this.mode !== 'viewer' || !this.viewerBody) return;
-    const w = (this.containerEl && this.containerEl.clientWidth) || 0;
-    if (Math.abs(w - (this._lastW || 0)) < 24) return;
-    this._lastW = w;
-    clearTimeout(this._relayoutTimer);
-    this._relayoutTimer = setTimeout(() => { if (this.mode === 'viewer') this.renderViewer(); }, 220);
+    if (justShown) {
+      // 由隐藏变可见：display:none 会把 scrollTop 清零，藏起来按比例恢复，避免先画一帧第一页。
+      this.restoreViewerScroll(true);
+      return;
+    }
+    // 宽度真实变化（浮动↔固定、转屏、拖动）：画布缩放后 scrollHeight 变了，
+    // 按比例把滚动恢复到原来那一页。防抖等布局稳定，避免连续 resize 反复触发。
+    clearTimeout(this._resizeScrollTimer);
+    this._resizeScrollTimer = setTimeout(() => {
+      if (this.mode === 'viewer') this.restoreViewerScroll(false);
+    }, 150);
   }
   /* 是否够宽到可以分两列。
-     只看宽度，不区分手机还是电脑——手机横屏（常见 780~930 CSS px）同样走双列。
-     阈值取 720：右列最窄 260px 时左列还剩约 460px，PDF 与列表都还看得清；
-     手机竖屏（360~430）自然落到单列。 */
+     竖屏：阈值 720（右列最窄 260px 时左列还剩约 460px，PDF 与列表都还看得清；
+     手机竖屏 360~430 自然落到单列，侧边栏也不会误判成双列）。
+     横屏：放低到 480——手机横屏标签页常见 568~930px，全部走双列；
+     用宽度而非纯朝向判断，是为了避开「横屏但其实是窄侧边栏」的情况（侧边栏横屏也就 280~360px，仍单列）。 */
   isWideEnough() {
     let w = (this.containerEl && this.containerEl.clientWidth) || 0;
     if (!w && typeof window !== 'undefined') w = window.innerWidth || 0;   // 转屏瞬间的兜底
-    return w >= 720;
+    const landscape = typeof window !== 'undefined' && window.innerWidth > window.innerHeight;
+    return landscape ? (w >= 480) : (w >= 720);
   }
   /* 彻底销毁上一轮的「最近打开 / 播放列表」容器（它可能挂在右列，不在 resultsEl 里）。 */
   disposeHomeSections() {
@@ -2254,7 +2339,7 @@ class HymnsView extends ItemView {
       else this.homeSections.remove();
     }
   }
-  applyResponsiveColumns(rerenderPdf) {
+  applyResponsiveColumns() {
     if (!this.rightCol || !this.footEl || !this.playerEl) return;
     const wide = this.isWideEnough();
     const key = (wide ? 'w' : 'n') + '|' + this.mode;
@@ -2287,8 +2372,8 @@ class HymnsView extends ItemView {
       this.contentEl.appendChild(this.playerEl);
       if (this.rightCol.parentNode) this.rightCol.remove();
     }
-    // 布局变了，PDF 要按新的宽度重画一次，否则预览会停留在旧尺寸
-    if (rerenderPdf && this.mode === 'viewer') this.renderViewer();
+    // 注意：这里不重画 PDF。画布 width:100% 会自适应新宽度，重画只会清空滚动、闪一下并回到第一页。
+    // 宽度/布局变化后的滚动位置由 onContainerResize → restoreViewerScroll 按比例恢复。
   }
 
   /* 随机查阅一首（底部工具条按钮：仅符号）。属于“查阅”行为，
@@ -2411,6 +2496,7 @@ class HymnsView extends ItemView {
       this._onWinResize = null;
     }
     clearTimeout(this._relayoutTimer);
+    clearTimeout(this._resizeScrollTimer);
     // 关掉的是“当前视图”时，把指向让给还开着的那个面板，避免操作落到一个已销毁的视图上
     if (this.plugin && this.plugin.view === this) {
       const other = this.app.workspace.getLeavesOfType(VIEW_TYPE_HYMNS)
@@ -2426,7 +2512,10 @@ class HymnsView extends ItemView {
       if (doc && this._onProjKey) doc.removeEventListener('keydown', this._onProjKey, true);
       if (doc && this._onFullKey) doc.removeEventListener('keydown', this._onFullKey, true);
     } catch (e) { /* ignore */ }
-    this.contentEl.empty();
+    // 不再 this.contentEl.empty()：侧边栏“收起”在 Obsidian 里只是把面板隐藏（display:none），
+    // 视图其实还在、下次划出不用重建——清空反而会让桌面端收起再划出时丢失 PDF 滚动位置，
+    // 并造成划出时白屏闪烁。真正销毁视图时 Obsidian 会自己把节点从文档移除，无需手动清。
+    // PDF 画布与文档已在上面显式释放（disposePdf*），显存/内存不会残留。
   }
 
   /* ---- 播放栏 ---- */
@@ -3560,6 +3649,16 @@ class HymnsView extends ItemView {
         // 让出主线程：pdf.js 走“伪 worker”（解析在主线程），必须喘口气，否则侧边栏长时间无响应
         await sleep(0);
       }
+      // 恢复到上次浏览到的位置：视图被销毁重建后，滚动位置会被重置为顶部。
+      // 优先按「比例」换算到新高度（宽度变化后画布缩放，总高度会变），没有比例才用绝对像素。
+      try {
+        const uid = this.viewHymn && this.viewHymn.uid;
+        const ratios = this.plugin && this.plugin._pdfScrollRatio;
+        const ratio = (uid && ratios && ratios[uid]) || 0;
+        const saved = (uid && this.plugin && this.plugin._pdfScroll && this.plugin._pdfScroll[uid]) || this._pdfScrollTop || 0;
+        const sh = body.scrollHeight;
+        body.scrollTop = ratio > 0 && sh > 0 ? Math.round(ratio * sh) : saved;
+      } catch (e) { /* ignore */ }
       if (total > maxPages) {
         body.createDiv({ cls: 'hymns-note', text: '仅预览前 ' + maxPages + ' 页（共 ' + total + ' 页）；完整内容请用下方“在新标签打开 PDF”。' });
       }
@@ -3789,6 +3888,8 @@ class HymnsPlugin extends Plugin {
     this.currentSequence = [];   // 当前播放列表（实时）
     this.view = null;
     this._pdfLib = null;
+    this._pdfScroll = {};        // 各诗歌 PDF 的滚动位置（uid → scrollTop），跨视图重建保留
+    this._pdfScrollRatio = {};   // 各诗歌 PDF 的滚动比例（uid → scrollTop/scrollHeight），宽度变化后按比例恢复到同一页
 
     this.registerView(VIEW_TYPE_HYMNS, (leaf) => new HymnsView(leaf, this));
     this.addSettingTab(new HymnsSettingTab(this.app, this));
@@ -4767,8 +4868,13 @@ class HymnsPlugin extends Plugin {
       const leaves = ws ? (ws.getLeavesOfType(VIEW_TYPE_HYMNS) || []) : [];
       leaves.forEach((leaf) => {
         const v = leaf && leaf.view;
-        if (v && typeof v.tryRebuildIfBlank === 'function') {
+        if (!v) return;
+        if (typeof v.tryRebuildIfBlank === 'function') {
           try { v.tryRebuildIfBlank(); } catch (e) { /* ignore */ }
+        }
+        // 预览中的面板：侧边栏收起再划出时滚动会被清零，这里恢复位置（不重渲染，避免闪）
+        if (typeof v.restoreViewerScroll === 'function') {
+          try { v.restoreViewerScroll(); } catch (e) { /* ignore */ }
         }
       });
     } catch (e) { /* ignore */ }
