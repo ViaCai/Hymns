@@ -23,15 +23,36 @@
   gap: 10px;
   padding: 8px;
 }
+/* 左列基准宽度必须是 0，不能用 auto：
+   auto 的基准取自“内容宽度”，切歌时左列内容一变（列表条目换成 PDF、标题长短不同），
+   基准就变，整行可分配的剩余空间随之变化，右列（可收缩）宽度会被挤得宽一下窄一下。
+   基准为 0 后左列宽度 = 容器减去右列和间距后的固定剩余量，与内容无关。 */
 .hymns-view.is-wide > .hymns-listwrap,
-.hymns-view.is-wide > .hymns-viewerwrap { flex: 1 1 auto; min-width: 0; }
+.hymns-view.is-wide > .hymns-viewerwrap { flex: 1 1 0%; min-width: 0; }
 .hymns-col-right {
   /* 宽屏固定 320；屏幕偏窄时（手机横屏常见 720~900）按比例收窄，
      保证左列至少还有约六成宽度放列表 / PDF */
-  flex: 0 1 320px; width: 320px; max-width: 40%; min-width: 240px;
+  /* 不收缩（flex-shrink: 0）：宽度只由容器宽度决定，切歌时内容怎么变都不会抖。
+     屏幕偏窄时靠 min-width / max-width 兜底，不会溢出。 */
+  flex: 0 0 320px; width: 320px; max-width: 40%; min-width: 240px;
   display: flex; flex-direction: column; gap: 8px;
   /* 整列不滚动：滚动只发生在上层内容区，滑条不会一路画到播放栏旁边 */
   min-height: 0; overflow: hidden;
+  position: relative;   /* 作为下面那条分割线的定位基准 */
+}
+/* 左右列之间的分割线：画在右列左边缘的一条 1px 竖线。
+   用绝对定位而不是 border / 单独一个元素 —— border 会把固定宽度的右列撑宽，
+   多一个 flex 子元素又会挤占间距；绝对定位完全不参与布局、一点空间都不占。
+   单列模式下右列整个被移除，这条线也随之消失。 */
+.hymns-col-right::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 1px;
+  background: var(--background-modifier-border);
+  /* 盖过播放栏（z-index:5），保证是连续的一整条，不会在搜索框 / 播放栏处断开 */
+  z-index: 6;
+  pointer-events: none;   /* 纯装饰，不挡点击 */
 }
 /* 右列的上层内容区：占满播放栏以外的全部高度。
    搜索框 / 预览按钮被推到它的最底部 → 紧贴播放栏；
