@@ -777,7 +777,7 @@ button.hymns-icon-btn.hymns-pl-del:hover { color: var(--text-error); background:
 .hymns-proj .hymns-proj-grip svg { width: 26px; height: 26px; }
 .hymns-proj.is-fullscreen .hymns-proj-grip { display: none; }
 
-/* 右上角工具：播放 / 全屏 / 退出 */
+/* 右上角工具：上一页 / 下一页 / 播放 / 全屏 / 退出 */
 .hymns-proj .hymns-proj-tools {
   position: absolute; top: 32px; right: 14px;
   display: flex; align-items: center; gap: 8px;
@@ -796,8 +796,10 @@ button.hymns-icon-btn.hymns-pl-del:hover { color: var(--text-error); background:
 }
 .hymns-proj button.hymns-proj-btn:hover { background: rgba(255, 255, 255, .22); color: #fff; }
 .hymns-proj button.hymns-proj-btn svg { width: 20px; height: 20px; }
+/* 到首页 / 末页时的上下翻页按钮 */
+.hymns-proj button.hymns-proj-page-btn:disabled { opacity: .3; cursor: default; background: rgba(255, 255, 255, .04); }
 
-/* 翻页：左右两侧的大按钮（触屏也好点） */
+/* 换诗歌：左右两侧的大按钮（触屏也好点），对应 ← → 键 */
 .hymns-proj button.hymns-proj-nav {
   position: absolute; top: 50%;
   transform: translateY(-50%);
@@ -815,7 +817,7 @@ button.hymns-icon-btn.hymns-pl-del:hover { color: var(--text-error); background:
 .hymns-proj button.hymns-proj-nav.is-prev { left: 10px; }
 .hymns-proj button.hymns-proj-nav.is-next { right: 10px; }
 .hymns-proj button.hymns-proj-nav:disabled { opacity: .18; cursor: default; background: rgba(255, 255, 255, .04); }
-.hymns-proj.is-single button.hymns-proj-nav { display: none; }   /* 只有一页：不显示翻页 */
+.hymns-proj.is-single button.hymns-proj-page-btn { display: none; }   /* 只有一页：不显示上下翻页 */
 
 /* 底部信息条：诗歌名 / 操作提示 / 页码（播放条展开时让位） */
 .hymns-proj .hymns-proj-bar {

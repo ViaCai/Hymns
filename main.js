@@ -191,6 +191,16 @@ const CHANGELOG_CONTENT = {
 - **修好了「最近打开 / 播放列表」有时点不动的问题**
   以前在右侧这一块，有时点「最近打开」或「播放列表」没反应、有时又有反应。原因是左侧列表每次刷新都会把这一块重建一遍，刷新刚好撞上你点击的瞬间，这次点击就被丢掉了。现在这一块建好就稳定保留、原地刷新，不再被重建，点一下就能稳定展开 / 收起。`,
 
+  '2.1.0': `## [2.1.0] - 2026-11-08
+
+### 本次更新
+- **投影时的方向键改成：上下翻页、左右换诗歌**
+  以前把诗歌投到大屏时，左右键是翻页，想换上一首 / 下一首没有快捷键。现在按 ↑ / ↓ 是上一页 / 下一页，按 ← / → 是上一首 / 下一首（PageUp / PageDown 和上下键一样）。换诗歌会跟着你当前正在浏览的那份列表走，会自动跳过没有 PDF 的诗歌，到头会提示一下；如果正在放伴奏，也会跟着换成新这首，不会出现画面换了、声音还是上一首。
+- **投影画面上的按钮也一起调整了**
+  屏幕左右两侧的大箭头现在改成「上一首 / 下一首」（触屏点起来也顺手），右上角多了 ↑ ↓ 两个小按钮用来翻页。底部那行操作提示也改成了新规则。
+
+小提示：触屏左右滑动和鼠标滚轮仍然是翻页，没有改动；Home / End 还是跳到第一页 / 最后一页，空格播放，O 全屏，P / Esc 退出。`,
+
   '2.0.4': `## [2.0.4] - 2026-10-30
 
 ### 本次更新
@@ -1448,7 +1458,8 @@ class LyricsModal extends Modal {
 
 /* ============ 窗口投影（单页投影：窗口内可拖动 / 整屏全屏） ============
    会众唱诗时把诗歌页投到大屏：一个屏幕只放一页 PDF。
-   · 翻页：左右按钮、方向键 / PageUp / PageDown、鼠标滚轮、触屏左右滑动
+   · 翻页：↑ ↓ / PageUp / PageDown、右上角上下按钮、鼠标滚轮、触屏左右滑动
+   · 换诗歌：← →、屏幕左右两侧的大按钮（沿用侧边栏正在浏览的列表）
    · 播放：右上角 ▶ 或空格键 —— 打开底部播放条并播放这首诗歌的 MP3；
            播放条会占用页面下方空间（而不是盖在页面上），绝不挡住 PDF 的字
    · 全屏：默认只占满 Obsidian 窗口（顶部把手可按住拖动位置 / 双击复位）；
@@ -1510,8 +1521,16 @@ class HymnProjection {
     setIcon(this.gripEl.createSpan({ cls: 'hymns-proj-grip-icon' }), 'grip-horizontal');
     this.bindDrag();
 
-    // 右上角：播放 / 全屏（桌面端）/ 退出
+    // 右上角：上一页 / 下一页 / 播放 / 全屏（桌面端）/ 退出
+    // 上下键翻页，这两个按钮给触屏（没有键盘）翻页用；左右两侧的大按钮改成上一首 / 下一首，
+    // 与「← → 换诗歌、↑ ↓ 翻页」的键盘规则保持一致。
     this.toolsEl = el.createDiv({ cls: 'hymns-proj-tools' });
+    this.pagePrevBtn = this.toolsEl.createEl('button', { cls: 'hymns-proj-btn hymns-proj-page-btn', attr: { 'aria-label': '上一页（↑）', title: '上一页（↑ / 滚轮上）' } });
+    setIcon(this.pagePrevBtn, 'chevron-up');
+    this.pagePrevBtn.addEventListener('click', () => this.step(-1));
+    this.pageNextBtn = this.toolsEl.createEl('button', { cls: 'hymns-proj-btn hymns-proj-page-btn', attr: { 'aria-label': '下一页（↓）', title: '下一页（↓ / 滚轮下）' } });
+    setIcon(this.pageNextBtn, 'chevron-down');
+    this.pageNextBtn.addEventListener('click', () => this.step(1));
     this.playBtn = this.toolsEl.createEl('button', { cls: 'hymns-proj-btn', attr: { 'aria-label': '播放（空格）', title: '播放（空格）' } });
     setIcon(this.playBtn, 'play');
     this.playBtn.addEventListener('click', () => this.togglePlay());
@@ -1524,18 +1543,19 @@ class HymnProjection {
     setIcon(this.closeBtn, 'x');
     this.closeBtn.addEventListener('click', () => this.close());
 
-    this.prevBtn = el.createEl('button', { cls: 'hymns-proj-nav is-prev', attr: { 'aria-label': '上一页（←）', title: '上一页（← / 滚轮上）' } });
+    // 左右两侧的大按钮：上一首 / 下一首（← → 键同样是换诗歌）
+    this.prevBtn = el.createEl('button', { cls: 'hymns-proj-nav is-prev', attr: { 'aria-label': '上一首（←）', title: '上一首（←）' } });
     setIcon(this.prevBtn, 'chevron-left');
-    this.prevBtn.addEventListener('click', () => this.step(-1));
+    this.prevBtn.addEventListener('click', () => this.switchHymn(-1));
 
-    this.nextBtn = el.createEl('button', { cls: 'hymns-proj-nav is-next', attr: { 'aria-label': '下一页（→）', title: '下一页（→ / 滚轮下）' } });
+    this.nextBtn = el.createEl('button', { cls: 'hymns-proj-nav is-next', attr: { 'aria-label': '下一首（→）', title: '下一首（→）' } });
     setIcon(this.nextBtn, 'chevron-right');
-    this.nextBtn.addEventListener('click', () => this.step(1));
+    this.nextBtn.addEventListener('click', () => this.switchHymn(1));
 
     // 底部信息条：诗歌名 / 操作提示 / 页码
     this.barEl = el.createDiv({ cls: 'hymns-proj-bar' });
     this.titleEl = this.barEl.createSpan({ cls: 'hymns-proj-title', text: hymnLabel(this.hymn) });
-    const hint = '← → / 滚轮 翻页 · 空格 播放' + (this.isDesktop ? ' · O 全屏' : '') + ' · P / Esc 退出';
+    const hint = '↑ ↓ 翻页 · ← → 换诗歌 · 滚轮/滑动 翻页 · 空格 播放' + (this.isDesktop ? ' · O 全屏' : '') + ' · P / Esc 退出';
     this.barEl.createSpan({ cls: 'hymns-proj-hint', text: hint });
     this.pageEl = this.barEl.createSpan({ cls: 'hymns-proj-page', text: '' });
 
@@ -1707,14 +1727,85 @@ class HymnProjection {
     this.renderPage(t);
   }
 
+  /* 投影里的「上一首 / 下一首」用哪份列表：优先沿用侧边栏正在浏览的列表
+     （搜索结果、歌单、分类…），投影若是从别处打开的、列表里没有这一首，则退回全部诗歌。
+     返回 { list, i }，i 为当前诗歌在列表中的位置。 */
+  resolveHymnList() {
+    const uid = this.hymn && this.hymn.uid;
+    const view = this.view;
+    const all = (this.plugin && this.plugin.hymns) || [];
+    let list = (view && view.currentList && view.currentList.length) ? view.currentList : all;
+    let i = list.findIndex((x) => x && x.uid === uid);
+    if (i < 0 && list !== all) { list = all; i = list.findIndex((x) => x && x.uid === uid); }
+    return { list, i };
+  }
+
+  /* 上一首 / 下一首：只切换投影里显示的诗歌，不动播放列表、不打断没在放的音频。
+     跳过没有 PDF 的诗歌，保证切过去一定能投出来。 */
+  switchHymn(dir) {
+    if (this._closed || dir === 0) return;
+    const { list, i } = this.resolveHymnList();
+    if (i < 0) { new Notice('当前诗歌不在列表里，无法切换'); return; }
+    let j = i + dir;
+    while (j >= 0 && j < list.length && !(list[j] && list[j].pdfPath)) j += dir;
+    if (j < 0 || j >= list.length) {
+      new Notice(dir > 0 ? '已经是列表最后一首' : '已经是列表第一首');
+      return;
+    }
+    this.setHymn(list[j], j);
+  }
+
+  /* 换到另一首诗歌：更新标题、作废未完成的渲染、释放旧 PDF 与画布，再重新打开。 */
+  setHymn(h, index) {
+    // 原来正在播放这一首 → 顺势播放新歌，避免 PDF 换了、声音还是上一首
+    const wasMine = !!(this._audioEl && !this._audioEl.paused && this.view &&
+      this.view.activeHymn && this.hymn && this.view.activeHymn.uid === this.hymn.uid);
+    this.hymn = h;
+    if (this.titleEl) this.titleEl.setText(hymnLabel(h));
+    if (this.pbTitleEl) this.pbTitleEl.setText(hymnLabel(h));
+    // 令牌自增：上一首尚未完成的渲染会被 renderPage 判为过期，不会把旧页面贴上来
+    this._token = (this._token || 0) + 1;
+    if (this._canvas) { this.releaseCanvas(this._canvas); this._canvas = null; }
+    if (this.pdfDoc) {
+      try { this.pdfDoc.destroy(); } catch (e) { /* ignore */ }
+      this.pdfDoc = null;
+    }
+    this.pageNo = 1;
+    this.total = 1;
+    this.updateChrome();
+    this.showTip('正在打开投影…');
+    this.wake();
+    // 与侧边栏同步：退出投影后按 P 会接着这一首，最近打开也记上这一首
+    const view = this.view;
+    if (view) {
+      view.viewHymn = h;
+      view.viewIndex = index >= 0 ? index : 0;
+      try { if (typeof view.renderViewer === 'function') view.renderViewer(); } catch (e) { /* ignore */ }
+      if (typeof view.refreshHomeSections === 'function' && typeof view.isWideEnough === 'function' && view.isWideEnough()) {
+        try { view.refreshHomeSections(); } catch (e) { /* ignore */ }
+      }
+      if (wasMine && typeof view.playForProjection === 'function') {
+        try { view.playForProjection(h); } catch (e) { /* ignore */ }
+      }
+    }
+    try { if (this.plugin && this.plugin.addRecent) this.plugin.addRecent(h); } catch (e) { /* ignore */ }
+    this.syncPlayState();
+    this.load();
+  }
+
   updateChrome() {
     if (!this.el) return;
     this.el.classList.toggle('is-single', this.total <= 1);
     const txt = this.pageNo + ' / ' + this.total;
     if (this.pageEl) this.pageEl.setText(txt);
     if (this.pbPageEl) this.pbPageEl.setText(txt);
-    if (this.prevBtn) this.prevBtn.disabled = this.pageNo <= 1;
-    if (this.nextBtn) this.nextBtn.disabled = this.pageNo >= this.total;
+    // 上下翻页按钮：到首页 / 末页时置灰
+    if (this.pagePrevBtn) this.pagePrevBtn.disabled = this.pageNo <= 1;
+    if (this.pageNextBtn) this.pageNextBtn.disabled = this.pageNo >= this.total;
+    // 左右换诗歌按钮：到列表头尾时置灰（与边界提示一致）
+    const { list, i } = this.resolveHymnList();
+    if (this.prevBtn) this.prevBtn.disabled = i <= 0;
+    if (this.nextBtn) this.nextBtn.disabled = i < 0 || i >= list.length - 1;
   }
 
   showTip(text) {
@@ -1793,13 +1884,17 @@ class HymnProjection {
     }
     if (k === 'Home') { e.preventDefault(); e.stopPropagation(); this.gotoPage(1); return; }
     if (k === 'End') { e.preventDefault(); e.stopPropagation(); this.gotoPage(this.total); return; }
-    let dir = 0;
-    if (k === 'ArrowLeft' || k === 'PageUp' || k === 'ArrowUp') dir = -1;
-    else if (k === 'ArrowRight' || k === 'PageDown' || k === 'ArrowDown') dir = 1;
-    if (!dir) return;
-    e.preventDefault();
-    e.stopPropagation();
-    this.step(dir);
+    // 上下 = 上下翻页；左右 = 上一首 / 下一首（与底部提示一致）
+    if (k === 'ArrowUp' || k === 'PageUp' || k === 'ArrowDown' || k === 'PageDown') {
+      e.preventDefault(); e.stopPropagation();
+      this.step(k === 'ArrowUp' || k === 'PageUp' ? -1 : 1);
+      return;
+    }
+    if (k === 'ArrowLeft' || k === 'ArrowRight') {
+      e.preventDefault(); e.stopPropagation();
+      this.switchHymn(k === 'ArrowLeft' ? -1 : 1);
+      return;
+    }
   }
 
   /* ---- 窗口模式：顶部把手拖动位置 ---- */
@@ -2422,7 +2517,7 @@ class HymnsView extends ItemView {
   }
 
   /* ---- 窗口投影 ----
-     会众唱诗时把一首诗歌投到大屏：一个屏幕一页 PDF，左右翻页，Esc / ✕ 退出。
+     会众唱诗时把一首诗歌投到大屏：一个屏幕一页 PDF，↑↓ 翻页 / ←→ 换诗歌，Esc / ✕ 退出。
      入口有三处：列表与查看器的「更多」菜单、预览时按 P。 */
   openProjection(h, fullscreen = false) {
     const hymn = h || this.viewHymn;
