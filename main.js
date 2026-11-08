@@ -115,6 +115,37 @@ const UPDATE_BASE = 'https://raw.githubusercontent.com/' + UPDATE_REPO + '/' + U
 
 // ==================== 更新日志内容（供弹窗离线展示；缺失时回退到远端 CHANGELOG.md）====================
 const CHANGELOG_CONTENT = {
+  '2.2.0': `## [2.2.0] - 2026-11-08
+
+### 本次更新
+- **新增「白板诗歌」：只看这一首，也只分享这一首**
+  白板诗歌是几百首合在一起的一本大 PDF，以前想看其中一首得整本翻。现在预览诗歌 PDF 时：
+  - **怎么打开**：按 B 键，或者点「更多 → 查看白板PDF」，标签页里就只出现这一首的白板页面；一首占好几页的会一起带出来，不会夹带整本书。
+  - **怎么分享**：点「分享白板PDF」，发出去的也只是这一首的页面，不会把整本大文件发给别人。
+  - 白板合订本放在仓库里任何文件夹都能自动认出来，设置里不用填路径；如果同一本有好几份，也会自动挑合适的那本。
+  - **设置里能看到认出了几本**：哪几本找到了、放在哪、每本认出了多少首，都列得清清楚楚；旁边有「浏览…」「自动检测」「清空」，还有「重新检测」「读取全部书签」。
+  - 查看 / 分享时生成的那些小 PDF 只是缓存，放在合订本旁边的「单页」文件夹里，设置里点「清空单页白板PDF」可以一键清掉（进回收站，能恢复），原来的大文件不会动。
+
+- **投影时也能直接搜诗歌换歌**
+  投影画面顶部多了一个搜索框，输入编号、歌名或歌词，下面会列出所有匹配的诗歌，每条都带歌名和含关键词标出的那句歌词；点一条就立刻切过去投。框里有字时会出现清空按钮，一下就能全清。
+  选完一首再点一下搜索框，上次的候选会原样弹回来，顺序、位置都不变，还会把上次选中的那首标出来，方便连着投一批。
+  小提示：搜出来的这一批会接着成为「← → 换诗歌」的顺序；在搜索框里打字时，空格、方向键、P、O 这些快捷键会先让给输入框。
+
+- **搜索词开头加字母，可以临时搜别的诗歌本**
+  不管当前选的是「大本诗歌」还是别的诗歌本，只要在搜索词最前面加字母，就能临时指定搜哪几本：A 全部、D 大本、B 补充本、C 唱诗人、X 新歌颂咏、E 儿童、Q 青年、T 特会、O 其他。字母可以连着写，比如「DB恩典」就是同时在大本和补充本里找「恩典」；只写「DB」就列出这两本的全部诗歌。标出来的只会是真正的关键词「恩典」，不会把开头的字母算进去。投影里的搜索框也用同一套规则。
+  另外，**按住底部那颗分类按钮约半秒**，不管现在选的是哪一本，都能马上回到「全部诗歌」；轻点一下还是照旧弹分类菜单。
+
+- **投影的按钮和手势重新整理了**
+  - 屏幕左右两侧的大按钮改成「上一节 / 下一节」，箭头也换成 ↑ / ↓，不会再看错成换歌；右上角那两个改成「上一首 / 下一首」。
+  - 键盘不变：↑ ↓ 翻节、← → 换诗歌。
+  - 触屏和鼠标拖拽现在完全一致：左右拖 / 滑换诗歌（左＝下一首，右＝上一首），上下拖 / 滑翻节（下＝上一节，上＝下一节）；鼠标滚轮还是翻节。
+
+### 修复
+- **投影顶部不会再只剩下关闭按钮掉到第二行**
+  现在够宽时整排一行；真放不下时会整整齐齐变成两行（第一行搜索框、第二行按钮一排），不会再单独把 ✕ 挤下去，也不会把搜索框压得太窄不好输入。
+
+小提示：这里说的「一节」就是投影里的一页 PDF；Home / End 跳到第一页 / 最后一页，空格播放，O 全屏，P / Esc 退出，都和以前一样。`,
+
   '1.0.6': `## [1.0.6] - 2026-10-21
 
 ### 本次更新
@@ -250,6 +281,105 @@ function inFolder(pathLower, rootLower) {
 function pad(n) { return String(n).padStart(3, '0'); }
 function catInfo(letter) { return CATEGORIES[letter] || { name: '其他诗歌', order: 7, color: '#757575' }; }
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+/* ============ 白板诗歌（合订本 PDF）工具 ============
+   白板 PDF 是「一个分类一本」的合订本，好在每个文件都带书签，每首诗歌对应一条
+   书签（叶子节点）并直接指向它所在的第一页。下面两个函数分别负责：
+     1) 从书签标题里认出诗歌编号；
+     2) 把指定的几页渲染结果打包成一个「只含这几页」的独立 PDF。 */
+
+/* 书签标题 → 诗歌编号。
+   真实标题形如：
+     b.pdf 「0001 開口讚美」「0702-1 是你嗎」
+     c.pdf 「诗歌B-001」「诗歌附-01」
+     d.pdf 「001 頌讚三一神－祂的計劃」「附 6 經歷神…」
+     e.pdf 「诗歌_0001-0002」（一页印两首，会返回两个编号）
+     q.pdf 「青年诗歌001 神就是爱」
+     x.pdf 「001 興起」
+   分组标题（「001-050」「0001-0100 讚美的話」）不是诗歌，调用方只喂叶子书签，
+   这里再挡一层纯范围标题；目录 / 封面 / 索引 / 和弦表一律排除。
+   返回 [{num, appendix}]，认不出就返回空数组。 */
+function parseWhiteboardTitle(title) {
+  const s = String(title || '').replace(/[\r\n\t]/g, ' ').trim();
+  if (!s) return [];
+  if (/目录|目錄|封面|索引|筆畫|笔画|和弦|标题|標題|附录表/i.test(s)) return [];
+  if (/^\s*\d{3,4}\s*[-－~～至]\s*\d{3,4}/.test(s)) return [];        // 「001-050」「0001-0100 讚美的話」等分组标题
+  // 3~4 位编号优先（补零编号）。上限 4 个，防止把页码、调号之类一起吃进来。
+  const nums = [];
+  const re = /\d{3,4}/g;
+  let m;
+  while ((m = re.exec(s)) !== null && nums.length < 4) {
+    const n = parseInt(m[0], 10);
+    if (n > 0 && n < 2000 && nums.indexOf(n) < 0) nums.push(n);
+  }
+  if (nums.length) return nums.map((n) => ({ num: n, appendix: false }));
+  // 附录 / 短编号：附 6、诗歌附-01、s1
+  const a = s.match(/(?:附|補|补)\s*[-－]?\s*(\d{1,2})/) || s.match(/(?:^|\s)[sS]\s*(\d{1,2})(?!\d)/);
+  if (a) return [{ num: parseInt(a[1], 10), appendix: true }];
+  return [];
+}
+
+/* base64（canvas.toDataURL 的结果）→ 字节 */
+function base64ToBytes(b64) {
+  const bin = atob(String(b64));
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i) & 0xff;
+  return out;
+}
+
+/* 把若干 JPEG 页包成一个「只含这些页」的 PDF（1.4，图片 XObject + DCTDecode）。
+   不引入额外依赖：手写对象与 xref，字节偏移按真实字节累加，确保 Obsidian 原生
+   PDF 查看器、微信等都能直接打开。
+   images: [{ pageW, pageH, imgW, imgH, jpeg: Uint8Array }] */
+function buildImagePdf(images) {
+  const list = (images || []).filter((x) => x && x.jpeg && x.jpeg.length);
+  if (!list.length) throw new Error('没有可写入的页面');
+  const chunks = [];
+  let total = 0;
+  const str = (s) => {
+    const a = new Uint8Array(s.length);
+    for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i) & 0xff;
+    chunks.push(a); total += a.length;
+  };
+  const bytes = (b) => { const a = b instanceof Uint8Array ? b : new Uint8Array(b); chunks.push(a); total += a.length; };
+  const offsets = [];
+  const startObj = (n) => { offsets[n] = total; str(n + ' 0 obj\n'); };
+  const endObj = () => { str('\nendobj\n'); };
+  const f2 = (n) => String(Math.round(Number(n) * 100) / 100);
+
+  str('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n');
+  startObj(1); str('<< /Type /Catalog /Pages 2 0 R >>'); endObj();
+  const N = list.length;
+  const kids = [];
+  for (let i = 0; i < N; i++) kids.push((3 + i * 3) + ' 0 R');
+  startObj(2); str('<< /Type /Pages /Kids [' + kids.join(' ') + '] /Count ' + N + ' >>'); endObj();
+  list.forEach((img, i) => {
+    const pn = 3 + i * 3, xn = 4 + i * 3, cn = 5 + i * 3;
+    const W = f2(img.pageW || img.imgW), H = f2(img.pageH || img.imgH);
+    startObj(pn);
+    str('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' + W + ' ' + H + ']'
+      + ' /Resources << /XObject << /Im0 ' + xn + ' 0 R >> >> /Contents ' + cn + ' 0 R >>');
+    endObj();
+    startObj(xn);
+    str('<< /Type /XObject /Subtype /Image /Width ' + img.imgW + ' /Height ' + img.imgH
+      + ' /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' + img.jpeg.length + ' >>\nstream\n');
+    bytes(img.jpeg);
+    str('\nendstream'); endObj();
+    const content = 'q ' + W + ' 0 0 ' + H + ' 0 0 cm /Im0 Do Q\n';
+    startObj(cn);
+    str('<< /Length ' + content.length + ' >>\nstream\n' + content + 'endstream'); endObj();
+  });
+  const lastObj = 2 + 3 * N;
+  const xrefAt = total;
+  str('xref\n0 ' + (lastObj + 1) + '\n');
+  str('0000000000 65535 f \n');
+  for (let n = 1; n <= lastObj; n++) str(String(offsets[n]).padStart(10, '0') + ' 00000 n \n');
+  str('trailer\n<< /Size ' + (lastObj + 1) + ' /Root 1 0 R >>\nstartxref\n' + xrefAt + '\n%%EOF\n');
+  const out = new Uint8Array(total);
+  let p = 0;
+  for (const c of chunks) { out.set(c, p); p += c.length; }
+  return out;
+}
 
 function parsePdfCode(name) {
   const m = name.match(/^([DBECXQTO])(s|附)?(\d+)/i);
@@ -471,6 +601,68 @@ function highlight(text, keywords) {
   if (!kws.length) return esc;
   const re = new RegExp('(' + kws.join('|') + ')', 'gi');
   return esc.replace(re, (m) => '<mark>' + m + '</mark>');
+}
+
+/* ===== 搜索范围前缀（侧边栏与投影共用）=====
+   搜索词开头的「字母串」= 临时指定要搜哪些诗歌本，不受当前选中的分类限制：
+     A = 全部诗歌，D = 大本，B / C / X / E / Q / T / O = 各自诗歌本。
+   字母可以连写，表示同时搜几本：「DB 恩典」「DB恩典」「db恩典」= 大本 + 补充本；
+   「A 恩典」= 全库（A 与其它字母连写时仍按全部处理）。
+   字母与关键词之间可有空格、\ 、/ 、: 、逗号等分隔符，也可以直接连写；
+   只写一串字母（如 DB）就列出这几本的全部诗歌。大小写不限。
+   返回 null = 没有前缀；否则 { letters, cats, all, rest, keywords }。
+   关键：rest / keywords 是「剥掉范围前缀后的真正搜索词」，检索和标出关键词都用它，
+   这样「B恩典」只把范围限定到补充本，标出的仍是「恩典」而不是「B恩典」。 */
+function parseScope(q) {
+  const s = String(q || '').trim();
+  if (!s) return null;
+  const m = s.match(/^([ADBCXEQTO]+)(.*)$/i);
+  if (!m) return null;
+  const letters = m[1].toUpperCase();
+  const uniq = [];
+  for (const ch of letters) if (!uniq.includes(ch)) uniq.push(ch);
+  const rest = (m[2] || '').replace(/^[\s\\\/:：,，、]+/, '').trim();
+  return {
+    letters,
+    cats: uniq.filter((c) => c !== 'A'),
+    all: uniq.includes('A'),
+    rest,
+    keywords: rest.split(/\s+/).filter(Boolean),
+  };
+}
+
+/* 一首诗歌是否落在前缀指定的范围内；O = 不在已知分类字母里的「其他诗歌」 */
+function inScope(h, scope) {
+  if (!scope || scope.all) return true;
+  const L = String((h && h.letter) || '').toUpperCase();
+  for (const c of scope.cats) {
+    if (c === 'O' ? !KNOWN_LETTERS.has(L) : L === c) return true;
+  }
+  return false;
+}
+
+/* 歌词片段：命中词尽量落在片段开头，否则列表 / 候选框里看不到高亮。 */
+function lyricsSnippet(lyrics, keywords) {
+  if (!lyrics) return '';
+  const low = lyrics.toLowerCase();
+  const kws = [];
+  keywords.filter(Boolean).forEach((k) => { const s = String(k).toLowerCase(); if (!kws.includes(s)) kws.push(s); });
+  const win = [];
+  for (const k of kws) {
+    const pos = low.indexOf(k);
+    if (pos < 0) continue;                                            // 该词不在歌词里（可能命中标题）
+    if (win.some((w) => pos >= w.start && pos <= w.end)) continue;     // 已被已有窗口覆盖
+    const lineStart = lyrics.lastIndexOf('\n', Math.max(0, pos - 1)) + 1;
+    const start = Math.max(0, Math.max(lineStart, pos - 20));
+    const end = Math.min(lyrics.length, Math.max(pos + 46, start + 46));
+    win.push({ start, end });
+    if (win.length >= 2) break;
+  }
+  if (!win.length) return lyrics.slice(0, 80) + (lyrics.length > 80 ? '…' : '');
+  win.sort((a, b) => a.start - b.start);
+  return win
+    .map((w) => (w.start > 0 ? '…' : '') + lyrics.slice(w.start, w.end) + (w.end < lyrics.length ? '…' : ''))
+    .join(' … ');
 }
 
 async function copyText(text) {
@@ -723,6 +915,11 @@ class HymnsSettingTab extends PluginSettingTab {
       desc: '诗歌音频所在目录，留空 = 扫描整个仓库。',
     });
 
+    this.addWhiteboardFolderSetting(containerEl);
+    this.renderWhiteboardStatus(containerEl);
+
+    this.renderWhiteboardCacheSetting(containerEl);
+
     // 「MP3 随 PDF 切换 / PDF 随 MP3 切换」两个联动方向统一放在底部播放栏的「联动」按钮菜单里，
     // 这里只留一行说明，不再重复开关，避免同一功能出现两处入口。
     new Setting(containerEl)
@@ -821,6 +1018,262 @@ class HymnsSettingTab extends PluginSettingTab {
       this.display();
       new Notice('已改为扫描整个仓库，共索引 ' + this.plugin.hymns.length + ' 首');
     });
+  }
+
+  /* ---- 清空白板缓存：书签索引 + 查看/分享时生成的单页 PDF ---- */
+  renderWhiteboardCacheSetting(containerEl) {
+    new Setting(containerEl)
+      .setName('清空白板缓存')
+      .setDesc('换过白板 PDF 后可清空白板书签缓存，下次查看 / 分享会自动重新读取（也可点上面「读取全部书签」立刻读完）；查看 / 分享时生成的单页 PDF 也在这里一键清空。')
+      .addButton((b) => b.setButtonText('清空白板书签缓存').setCta().onClick(async () => {
+        await this.plugin.rebuildWhiteboardIndex();
+        this.updateWhiteboardStatus();
+        new Notice('白板书签缓存已清空，下次查看 / 分享白板 PDF 时会自动重新读取');
+      }))
+      .addButton((b) => {
+        this._wbClearBtn = b;
+        b.setButtonText('清空单页白板PDF')
+          .setTooltip('只删除由插件生成的「单页 / 白板 编号.pdf」缓存，合订本原文件不动')
+          .onClick(() => {
+            const list = this.plugin.listWhiteboardSingles();
+            if (!list.length) { new Notice('没有需要清空的单页白板 PDF'); return; }
+            const dirs = Array.from(new Set(list.map((f) => f.path.replace(/\/[^/]+$/, ''))));
+            new ConfirmModal(this.app, '清空单页白板 PDF',
+              '将删除 ' + list.length + ' 个由插件生成的单页 PDF（位于 ' + dirs.slice(0, 3).join('、') +
+              (dirs.length > 3 ? ' 等 ' + dirs.length + ' 处' : '') + ' 的「单页」文件夹）。' +
+              '这些只是查看 / 分享时生成的缓存，会被移入回收站；合订本原文件不受影响，下次查看 / 分享会自动重新生成。确定继续？',
+              async () => {
+                const r = await this.plugin.clearWhiteboardSingles();
+                this.updateWhiteboardStatus();
+                this.updateWhiteboardSingleCount();
+                new Notice('已清空 ' + r.deleted + ' 个单页白板 PDF' + (r.failed ? '（' + r.failed + ' 个失败）' : ''));
+              }).open();
+          });
+        this.updateWhiteboardSingleCount();
+      });
+  }
+
+  /* ---- 白板诗歌识别情况：6 本合订本找没找到、在哪、书签读没读 ---- */
+  renderWhiteboardStatus(containerEl) {
+    const box = containerEl.createDiv({ cls: 'hymns-scan-status hymns-wb-status' });
+    this._wbBox = box;
+    this._wbBody = box.createDiv({ cls: 'hymns-wb-body' });
+    const actions = box.createDiv({ cls: 'hymns-scan-actions' });
+
+    const rescan = actions.createEl('button', { text: '重新检测' });
+    rescan.addEventListener('click', () => {
+      this.updateWhiteboardStatus();
+      new Notice('已重新检测白板合订本');
+    });
+
+    const readAll = actions.createEl('button', { text: '读取全部书签（较慢）' });
+    readAll.addEventListener('click', async () => {
+      readAll.disabled = true; readAll.textContent = '读取中…';
+      let n = 0;
+      for (const L of ['B', 'C', 'D', 'E', 'Q', 'X']) {
+        if (!this.plugin.whiteboardSourceList(L).length) continue;
+        const rec = await this.plugin.ensureWhiteboardIndex(L);
+        if (rec && rec.map && Object.keys(rec.map).length) n++;
+      }
+      readAll.disabled = false; readAll.textContent = '读取全部书签（较慢）';
+      this.updateWhiteboardStatus();
+      new Notice('白板书签已读取 ' + n + ' 本');
+    });
+
+    this.updateWhiteboardStatus();
+  }
+
+  updateWhiteboardStatus() {
+    const body = this._wbBody;
+    if (!body) return;
+    body.empty();
+    const st = this.plugin.whiteboardStatus();
+    if (this._wbBox) this._wbBox.classList.toggle('is-error', !st.found);
+    body.createDiv({
+      cls: 'hymns-scan-line',
+      text: st.found
+        ? '✓ 已识别 ' + st.found + ' / 6 本白板合订本' +
+          (st.read ? ' · 已读书签 ' + st.read + ' 本（共 ' + st.hymns + ' 首）' : ' · 书签尚未读取')
+        : '✗ 仓库里没有找到白板合订本（b / c / d / e / q / x.pdf）',
+    });
+    body.createDiv({
+      cls: 'hymns-scan-note',
+      text: st.found
+        ? '放在仓库任何文件夹都能识别，只认文件名；同名有多份时优先设置里的目录、再优先「白板诗歌」文件夹。'
+        : '把白板合订本放进仓库任意文件夹即可，文件名保持 b.pdf、c.pdf、d.pdf、e.pdf、q.pdf、x.pdf（大小写不限）。',
+    });
+    if (st.singles) body.createDiv({
+      cls: 'hymns-scan-note',
+      text: '已生成 ' + st.singles + ' 个单页白板 PDF（查看 / 分享时的缓存，可用下方「清空单页白板PDF」清掉）。',
+    });
+    if (!st.found) return;
+
+    for (const r of st.rows) {
+      const row = body.createDiv({ cls: 'hymns-wb-row' + (r.src ? (r.current ? ' is-ok' : '') : ' is-missing') });
+      row.createSpan({ cls: 'hymns-wb-tag', text: (r.src ? '✓ ' : '✗ ') + r.letter + ' · ' + r.name });
+      if (!r.src) {
+        row.createSpan({ cls: 'hymns-wb-path', text: '未找到 ' + r.letter.toLowerCase() + '.pdf' });
+        continue;
+      }
+      const name = r.src.path.slice(r.src.path.lastIndexOf('/') + 1);
+      const mb = (r.src.size / 1048576).toFixed(1);
+      const state = r.current ? ('已读书签 ' + r.count + ' 首') : (r.stale ? '文件已更换，需重新读取' : '书签未读取');
+      row.createSpan({ cls: 'hymns-wb-meta', text: name + ' · ' + mb + ' MB · ' + state });
+      row.createSpan({ cls: 'hymns-wb-path', text: r.src.path });
+      if (r.extras > 1) row.createSpan({ cls: 'hymns-wb-path', text: '（同名共 ' + r.extras + ' 份，已优先选这一本）' });
+    }
+  }
+
+  /* ---- 白板诗歌文件夹：和 PDF 文件夹一样的「手填 + 浏览… + 自动检测 + 清空」 ----
+     这里填的目录只影响同名文件的优先级，留空依然是全仓库按文件名识别。 */
+  addWhiteboardFolderSetting(containerEl) {
+    const plugin = this.plugin;
+    const s = new Setting(containerEl)
+      .setName('白板诗歌文件夹（可选）')
+      .setDesc('白板合订本只按文件名认：b / c / d / e / q / x.pdf，放在仓库里任何文件夹都能识别，留空即可。填了目录只是优先用它里面的同名文件，别的目录里的仍会自动补上。预览 PDF 时按 B 或点「更多 → 查看白板PDF」，只打开这首诗歌那几页；单页 PDF 生成在「那本合订本所在目录 / 单页」，可随时删除。')
+      .addText((t) => {
+        this._wbText = t;
+        t.setPlaceholder('留空 = 全仓库识别')
+          .setValue(plugin.settings.whiteboardFolder || '')
+          .onChange(async (v) => {
+            plugin.settings.whiteboardFolder = normalize(v || '');
+            await plugin.saveAll();
+            if (this._wbHint) this._wbHint.update();
+            this.updateWhiteboardStatus();
+          });
+      })
+      .addButton((b) => b.setButtonText('浏览…').setTooltip('从含白板合订本的文件夹里点选，不用手打路径')
+        .onClick(() => this.browseWhiteboardFolder((p) => this.applyWhiteboardFolder(p))))
+      .addButton((b) => b.setButtonText('自动检测').setTooltip('按识别到的合订本数量排序，推荐最全的文件夹')
+        .onClick(() => this.pickWhiteboardFolder((p) => this.applyWhiteboardFolder(p))))
+      .addButton((b) => b.setButtonText('清空').setTooltip('清空 = 不限定目录，全仓库按文件名识别')
+        .onClick(() => this.applyWhiteboardFolder('')));
+    this._wbHint = this.makeWhiteboardHint(containerEl);
+    return s;
+  }
+
+  /* 白板文件夹的实时提示：这个目录（含子目录）里认出了几本，全仓库又有几本 */
+  makeWhiteboardHint(containerEl) {
+    const el = containerEl.createDiv({ cls: 'hymns-folder-hint' });
+    const update = () => {
+      const root = normalize(this.plugin.settings.whiteboardFolder || '');
+      const map = this.plugin.whiteboardSourceMap();
+      const countIn = (r) => {
+        const rl = r ? r.toLowerCase() : '';
+        const set = new Set();
+        for (const L of Object.keys(map)) {
+          if ((map[L] || []).some((x) => inFolder(x.path.toLowerCase(), rl))) set.add(L);
+        }
+        return set.size;
+      };
+      const all = countIn('');
+      const n = root ? countIn(root) : all;
+      el.empty();
+      el.removeClass('is-error');
+      if (!all) {
+        el.addClass('is-error');
+        el.setText('✗ 整个仓库里没有找到白板合订本（b / c / d / e / q / x.pdf）');
+        return;
+      }
+      if (root && !n) {
+        el.addClass('is-error');
+        el.setText('✗ 「' + root + '」及子文件夹里没有 b / c / d / e / q / x.pdf');
+        el.createDiv({ cls: 'hymns-scan-note', text: '留空即可全仓库识别；别的目录里已经找到 ' + all + ' 本。' });
+        return;
+      }
+      el.setText('✓ ' + (root ? '「' + root + '」及子文件夹' : '整个仓库') + '识别到 ' + n + ' / 6 本白板合订本');
+      if (root && n < all) {
+        el.createDiv({ cls: 'hymns-scan-note', text: '提示：全仓库共找到 ' + all + ' 本，留空可一并识别；填目录只影响同名文件的优先级。' });
+      }
+    };
+    update();
+    return { el, update };
+  }
+
+  /* 浏览：只列出「真的有白板合订本」的文件夹并标出本数；一本都没有时退回全仓库文件夹列表 */
+  browseWhiteboardFolder(onPick) {
+    const map = this.plugin.whiteboardSourceMap();
+    const byDir = new Map();
+    for (const L of Object.keys(map)) {
+      for (const src of map[L]) {
+        const dir = src.path.replace(/\/[^/]+$/, '');
+        if (!dir) continue;
+        if (!byDir.has(dir)) byDir.set(dir, new Set());
+        byDir.get(dir).add(L);
+      }
+    }
+    const dirs = Array.from(byDir.keys()).sort();
+    if (!dirs.length) {
+      new Notice('仓库里还没找到白板合订本，已列出全部文件夹');
+      this.browseFolder(onPick);
+      return;
+    }
+    const lookup = new Map();
+    const texts = dirs.map((d) => {
+      const t = d + '（' + byDir.get(d).size + ' 本）';
+      lookup.set(t, d);
+      return t;
+    });
+    new FolderSuggestModal(this.app, texts, '选择白板合订本所在文件夹', (t) => onPick(lookup.get(t) || t)).open();
+  }
+
+  /* 自动检测：按「这个目录（含子目录）里认出几本」排序；合订本分散多处时可直接选「留空 = 全仓库」 */
+  pickWhiteboardFolder(onPick) {
+    const map = this.plugin.whiteboardSourceMap();
+    const byDir = new Map();
+    const all = new Set();
+    for (const L of Object.keys(map)) {
+      if (map[L].length) all.add(L);
+      for (const src of map[L]) {
+        const dir = src.path.replace(/\/[^/]+$/, '');
+        if (!dir) continue;
+        if (!byDir.has(dir)) byDir.set(dir, { letters: new Set(), size: 0 });
+        const rec = byDir.get(dir);
+        rec.letters.add(L);
+        rec.size += src.size || 0;
+      }
+    }
+    const dirs = Array.from(byDir.keys()).sort((a, b) =>
+      (byDir.get(b).letters.size - byDir.get(a).letters.size) ||
+      (byDir.get(b).size - byDir.get(a).size) || a.localeCompare(b));
+    if (!dirs.length) {
+      new Notice('整个仓库都没有找到白板合订本（b / c / d / e / q / x.pdf）');
+      return;
+    }
+    const lookup = new Map();
+    const allText = '留空 = 全仓库按文件名识别（共 ' + all.size + ' 本）';
+    lookup.set(allText, '');
+    const texts = [allText];
+    for (const d of dirs.slice(0, 12)) {
+      const rec = byDir.get(d);
+      const t = d + '（' + rec.letters.size + ' 本 · ' + (rec.size / 1048576).toFixed(1) + ' MB）';
+      lookup.set(t, d);
+      texts.push(t);
+    }
+    const best = byDir.get(dirs[0]);
+    new FolderSuggestModal(this.app, texts,
+      '推荐：' + (best.letters.size >= all.size ? dirs[0] + '（' + best.letters.size + ' 本齐全）' : allText),
+      (t) => onPick(lookup.has(t) ? lookup.get(t) : t)).open();
+  }
+
+  /* 应用白板文件夹改动：保存 → 同步输入框 / 命中提示 / 识别状态 → 告知结果。
+     白板目录不影响诗歌 PDF 索引，所以不用整页重绘、也不用重建诗歌索引。 */
+  async applyWhiteboardFolder(value) {
+    const v = normalize(value || '');
+    this.plugin.settings.whiteboardFolder = v;
+    await this.plugin.saveAll();
+    if (this._wbText) { try { this._wbText.setValue(v); } catch (e) { /* ignore */ } }
+    if (this._wbHint) this._wbHint.update();
+    this.updateWhiteboardStatus();
+    new Notice('白板诗歌文件夹：' + (v || '留空（全仓库按文件名识别）'));
+  }
+
+  updateWhiteboardSingleCount() {
+    const b = this._wbClearBtn;
+    if (!b) return;
+    let n = 0;
+    try { n = this.plugin.listWhiteboardSingles().length; } catch (e) { /* ignore */ }
+    try { b.setButtonText(n ? '清空单页白板PDF（' + n + '）' : '清空单页白板PDF'); } catch (e2) { /* ignore */ }
   }
 
   /* ---- 文件夹设置行：手填 + 浏览 + 自动检测 + 清空，外加实时命中提示 ---- */
@@ -1457,9 +1910,12 @@ class LyricsModal extends Modal {
 }
 
 /* ============ 窗口投影（单页投影：窗口内可拖动 / 整屏全屏） ============
-   会众唱诗时把诗歌页投到大屏：一个屏幕只放一页 PDF。
-   · 翻页：↑ ↓ / PageUp / PageDown、右上角上下按钮、鼠标滚轮、触屏左右滑动
-   · 换诗歌：← →、屏幕左右两侧的大按钮（沿用侧边栏正在浏览的列表）
+   会众唱诗时把诗歌页投到大屏：一个屏幕只放一页 PDF（一页 = 一节）。
+   · 上一节 / 下一节：↑ ↓ / PageUp / PageDown、屏幕左右两侧的大按钮（↑ / ↓ 箭头）、鼠标滚轮、下滑 / 上滑
+   · 上一首 / 下一首：← →、右上角两个按钮、右滑 / 左滑（沿用侧边栏正在浏览的列表）
+   · 拖拽手势鼠标与触屏完全一致：左右拖换诗歌，上下拖翻节
+   · 找诗歌：顶部搜索框输入编号 / 歌名 / 歌词，弹出候选，点一条直接换诗歌；
+             搜索框和候选框里都有清空按钮，搜索后 ← → 顺着这批结果换诗歌
    · 播放：右上角 ▶ 或空格键 —— 打开底部播放条并播放这首诗歌的 MP3；
            播放条会占用页面下方空间（而不是盖在页面上），绝不挡住 PDF 的字
    · 全屏：默认只占满 Obsidian 窗口（顶部把手可按住拖动位置 / 双击复位）；
@@ -1496,6 +1952,13 @@ class HymnProjection {
     this._wheelAcc = 0;
     this._wheelAt = 0;
     this._audioEl = null;
+    this._projResults = null;                 // 投影内搜索的完整命中列表：搜索后 ← → 顺着结果换诗歌
+    this._projSuggestItems = [];              // 候选框里的全部候选项（不再截断 8 条）
+    this._projSuggestIndex = 0;               // 键盘上下键选中的候选项
+    this._projSearchTimer = null;             // 输入防抖
+    this._projLastQuery = '';                 // 上一次生成候选的完整搜索词
+    this._projPickedUid = null;               // 上一次选中的诗歌（再次点开搜索框时标出）
+    this._projSuggestScroll = 0;              // 候选框收起时的滚动位置（再次点开时原样恢复）
     this._startFs = !!startFs;                 // 若为 true，open() 末尾直接进入整屏（须由用户手势触发）
     this._onKeyDown = (e) => this.handleKey(e);
     this._onResize = () => this.scheduleFit();
@@ -1521,41 +1984,78 @@ class HymnProjection {
     setIcon(this.gripEl.createSpan({ cls: 'hymns-proj-grip-icon' }), 'grip-horizontal');
     this.bindDrag();
 
-    // 右上角：上一页 / 下一页 / 播放 / 全屏（桌面端）/ 退出
-    // 上下键翻页，这两个按钮给触屏（没有键盘）翻页用；左右两侧的大按钮改成上一首 / 下一首，
-    // 与「← → 换诗歌、↑ ↓ 翻页」的键盘规则保持一致。
+    // 顶部工具条：搜索框 + 上一首 / 下一首 / 播放 / 全屏（桌面端）/ 退出
+    // 换诗歌放右上角、翻节放左右两侧大按钮，方便投屏时站在屏幕边上手点 / 触屏滑动。
+    // 宽度足够时排一行；窄到搜索框放不下时，按钮整排一起换到第二行（见 styles.css）。
     this.toolsEl = el.createDiv({ cls: 'hymns-proj-tools' });
-    this.pagePrevBtn = this.toolsEl.createEl('button', { cls: 'hymns-proj-btn hymns-proj-page-btn', attr: { 'aria-label': '上一页（↑）', title: '上一页（↑ / 滚轮上）' } });
-    setIcon(this.pagePrevBtn, 'chevron-up');
-    this.pagePrevBtn.addEventListener('click', () => this.step(-1));
-    this.pageNextBtn = this.toolsEl.createEl('button', { cls: 'hymns-proj-btn hymns-proj-page-btn', attr: { 'aria-label': '下一页（↓）', title: '下一页（↓ / 滚轮下）' } });
-    setIcon(this.pageNextBtn, 'chevron-down');
-    this.pageNextBtn.addEventListener('click', () => this.step(1));
-    this.playBtn = this.toolsEl.createEl('button', { cls: 'hymns-proj-btn', attr: { 'aria-label': '播放（空格）', title: '播放（空格）' } });
+
+    // 顶部搜索：输入编号 / 歌名 / 歌词即弹出候选，点一条直接换诗歌。
+    // 有内容时，输入框内与候选框顶部都给出一键清空，投影中途不用退出去找歌。
+    this.searchWrap = this.toolsEl.createDiv({ cls: 'hymns-proj-search-wrap' });
+    this.searchEl = this.searchWrap.createEl('input', {
+      cls: 'hymns-proj-search',
+      attr: {
+        type: 'text', placeholder: '搜索诗歌…（DB/A 选本）',
+        title: '与侧边栏同一套搜索规则：开头 A=全部、D=大本、B/C/X/E/Q/T/O=各本，可连写如「DB恩典」同时搜大本与补充本',
+        'aria-label': '投影内搜索诗歌', autocomplete: 'off', spellcheck: 'false'
+      }
+    });
+    this.searchEl.addEventListener('input', () => this.onProjSearchInput());
+    // 选中一首后再点搜索框：原样弹回上一次的候选（连滚动位置都不变），并标出上次选中的那首
+    this.searchEl.addEventListener('focus', () => { this.reopenProjSuggestions(); this.wake(); });
+    this.searchEl.addEventListener('click', () => { this.reopenProjSuggestions(); this.wake(); });
+    this.searchClearBtn = this.searchWrap.createEl('button', {
+      cls: 'hymns-proj-search-clear',
+      attr: { type: 'button', 'aria-label': '清空搜索', title: '清空搜索' }
+    });
+    setIcon(this.searchClearBtn, 'x');
+    this.searchClearBtn.style.display = 'none';
+    this.searchClearBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.clearProjSearch();
+      try { this.searchEl.focus(); } catch (err) { /* ignore */ }
+    });
+    this.suggestEl = this.searchWrap.createDiv({ cls: 'hymns-proj-suggest' });
+    this.suggestEl.style.display = 'none';
+
+    // 五个按钮装进同一个容器：它们是一个整体，换行时一起走，
+    // 不会像以前那样只剩关闭按钮单独掉到第二行。
+    this.actionsEl = this.toolsEl.createDiv({ cls: 'hymns-proj-actions' });
+
+    this.hymnPrevBtn = this.actionsEl.createEl('button', { cls: 'hymns-proj-btn hymns-proj-hymn-btn', attr: { 'aria-label': '上一首（←）', title: '上一首（← / 右滑）' } });
+    setIcon(this.hymnPrevBtn, 'skip-back');
+    this.hymnPrevBtn.addEventListener('click', () => this.switchHymn(-1));
+    this.hymnNextBtn = this.actionsEl.createEl('button', { cls: 'hymns-proj-btn hymns-proj-hymn-btn', attr: { 'aria-label': '下一首（→）', title: '下一首（→ / 左滑）' } });
+    setIcon(this.hymnNextBtn, 'skip-forward');
+    this.hymnNextBtn.addEventListener('click', () => this.switchHymn(1));
+    this.playBtn = this.actionsEl.createEl('button', { cls: 'hymns-proj-btn', attr: { 'aria-label': '播放（空格）', title: '播放（空格）' } });
     setIcon(this.playBtn, 'play');
     this.playBtn.addEventListener('click', () => this.togglePlay());
     if (this.isDesktop) {
-      this.fsBtn = this.toolsEl.createEl('button', { cls: 'hymns-proj-btn', attr: { 'aria-label': '全屏投影（O）', title: '全屏投影（O）' } });
+      this.fsBtn = this.actionsEl.createEl('button', { cls: 'hymns-proj-btn', attr: { 'aria-label': '全屏投影（O）', title: '全屏投影（O）' } });
       setIcon(this.fsBtn, 'maximize');
       this.fsBtn.addEventListener('click', () => this.toggleFullscreen());
     }
-    this.closeBtn = this.toolsEl.createEl('button', { cls: 'hymns-proj-btn', attr: { 'aria-label': '退出投影（Esc / P）', title: '退出投影（Esc / P）' } });
+    this.closeBtn = this.actionsEl.createEl('button', { cls: 'hymns-proj-btn', attr: { 'aria-label': '退出投影（Esc / P）', title: '退出投影（Esc / P）' } });
     setIcon(this.closeBtn, 'x');
     this.closeBtn.addEventListener('click', () => this.close());
 
-    // 左右两侧的大按钮：上一首 / 下一首（← → 键同样是换诗歌）
-    this.prevBtn = el.createEl('button', { cls: 'hymns-proj-nav is-prev', attr: { 'aria-label': '上一首（←）', title: '上一首（←）' } });
-    setIcon(this.prevBtn, 'chevron-left');
-    this.prevBtn.addEventListener('click', () => this.switchHymn(-1));
+    // 左右两侧的大按钮：上一节 / 下一节。图标用 ↑ / ↓，和「↑ ↓ 翻节」的键盘规则对应，
+    // 再加一行小字，投屏时不会误看成「上一首 / 下一首」（那两个在右上角）。
+    this.prevBtn = el.createEl('button', { cls: 'hymns-proj-nav is-prev', attr: { 'aria-label': '上一节', title: '上一节（↑ / 下滑 / 下拖）' } });
+    setIcon(this.prevBtn, 'chevron-up');
+    this.prevBtn.createSpan({ cls: 'hymns-proj-nav-label', text: '上一节' });
+    this.prevBtn.addEventListener('click', () => this.step(-1));
 
-    this.nextBtn = el.createEl('button', { cls: 'hymns-proj-nav is-next', attr: { 'aria-label': '下一首（→）', title: '下一首（→）' } });
-    setIcon(this.nextBtn, 'chevron-right');
-    this.nextBtn.addEventListener('click', () => this.switchHymn(1));
+    this.nextBtn = el.createEl('button', { cls: 'hymns-proj-nav is-next', attr: { 'aria-label': '下一节', title: '下一节（↓ / 上滑 / 上拖）' } });
+    setIcon(this.nextBtn, 'chevron-down');
+    this.nextBtn.createSpan({ cls: 'hymns-proj-nav-label', text: '下一节' });
+    this.nextBtn.addEventListener('click', () => this.step(1));
 
     // 底部信息条：诗歌名 / 操作提示 / 页码
     this.barEl = el.createDiv({ cls: 'hymns-proj-bar' });
     this.titleEl = this.barEl.createSpan({ cls: 'hymns-proj-title', text: hymnLabel(this.hymn) });
-    const hint = '↑ ↓ 翻页 · ← → 换诗歌 · 滚轮/滑动 翻页 · 空格 播放' + (this.isDesktop ? ' · O 全屏' : '') + ' · P / Esc 退出';
+    const hint = '↑ ↓ 翻节 · ← → 换诗歌 · 左右拖/滑 换诗歌 · 上下拖/滑 翻节 · 滚轮 翻节 · 顶部搜索 换诗歌 · 空格 播放' + (this.isDesktop ? ' · O 全屏' : '') + ' · P / Esc 退出';
     this.barEl.createSpan({ cls: 'hymns-proj-hint', text: hint });
     this.pageEl = this.barEl.createSpan({ cls: 'hymns-proj-page', text: '' });
 
@@ -1727,13 +2227,18 @@ class HymnProjection {
     this.renderPage(t);
   }
 
-  /* 投影里的「上一首 / 下一首」用哪份列表：优先沿用侧边栏正在浏览的列表
-     （搜索结果、歌单、分类…），投影若是从别处打开的、列表里没有这一首，则退回全部诗歌。
-     返回 { list, i }，i 为当前诗歌在列表中的位置。 */
+  /* 投影里的「上一首 / 下一首」用哪份列表：
+     ① 投影里刚搜索过、且当前诗歌就在结果里 → 顺着搜索结果换；
+     ② 否则沿用侧边栏正在浏览的列表（歌单、分类…）；
+     ③ 列表里没有这一首则退回全部诗歌。返回 { list, i }，i 为当前位置。 */
   resolveHymnList() {
     const uid = this.hymn && this.hymn.uid;
     const view = this.view;
     const all = (this.plugin && this.plugin.hymns) || [];
+    if (this._projResults && this._projResults.length) {
+      const k = this._projResults.findIndex((x) => x && x.uid === uid);
+      if (k >= 0) return { list: this._projResults, i: k };
+    }
     let list = (view && view.currentList && view.currentList.length) ? view.currentList : all;
     let i = list.findIndex((x) => x && x.uid === uid);
     if (i < 0 && list !== all) { list = all; i = list.findIndex((x) => x && x.uid === uid); }
@@ -1761,6 +2266,8 @@ class HymnProjection {
     const wasMine = !!(this._audioEl && !this._audioEl.paused && this.view &&
       this.view.activeHymn && this.hymn && this.view.activeHymn.uid === this.hymn.uid);
     this.hymn = h;
+    // 在投影搜索结果里换诗歌（含 ← → / 触屏滑动）时，让「上次选中」标记跟着当前这一首
+    if (this._projResults && this._projResults.some((x) => x && x.uid === h.uid)) this._projPickedUid = h.uid;
     if (this.titleEl) this.titleEl.setText(hymnLabel(h));
     if (this.pbTitleEl) this.pbTitleEl.setText(hymnLabel(h));
     // 令牌自增：上一首尚未完成的渲染会被 renderPage 判为过期，不会把旧页面贴上来
@@ -1779,7 +2286,11 @@ class HymnProjection {
     const view = this.view;
     if (view) {
       view.viewHymn = h;
-      view.viewIndex = index >= 0 ? index : 0;
+      // index 只在与侧边栏当前列表对得上时才同步：投影内搜索结果是另一份列表，
+      // 直接写进去会让侧边栏的上一首 / 下一首错位。
+      if (index >= 0 && view.currentList && view.currentList[index] && view.currentList[index].uid === h.uid) {
+        view.viewIndex = index;
+      }
       try { if (typeof view.renderViewer === 'function') view.renderViewer(); } catch (e) { /* ignore */ }
       if (typeof view.refreshHomeSections === 'function' && typeof view.isWideEnough === 'function' && view.isWideEnough()) {
         try { view.refreshHomeSections(); } catch (e) { /* ignore */ }
@@ -1799,13 +2310,205 @@ class HymnProjection {
     const txt = this.pageNo + ' / ' + this.total;
     if (this.pageEl) this.pageEl.setText(txt);
     if (this.pbPageEl) this.pbPageEl.setText(txt);
-    // 上下翻页按钮：到首页 / 末页时置灰
-    if (this.pagePrevBtn) this.pagePrevBtn.disabled = this.pageNo <= 1;
-    if (this.pageNextBtn) this.pageNextBtn.disabled = this.pageNo >= this.total;
-    // 左右换诗歌按钮：到列表头尾时置灰（与边界提示一致）
+    // 左右两侧大按钮 = 上一节 / 下一节：到首页 / 末页时置灰
+    if (this.prevBtn) this.prevBtn.disabled = this.pageNo <= 1;
+    if (this.nextBtn) this.nextBtn.disabled = this.pageNo >= this.total;
+    // 右上角 = 上一首 / 下一首：到列表头尾时置灰（与边界提示一致）
     const { list, i } = this.resolveHymnList();
-    if (this.prevBtn) this.prevBtn.disabled = i <= 0;
-    if (this.nextBtn) this.nextBtn.disabled = i < 0 || i >= list.length - 1;
+    if (this.hymnPrevBtn) this.hymnPrevBtn.disabled = i <= 0;
+    if (this.hymnNextBtn) this.hymnNextBtn.disabled = i < 0 || i >= list.length - 1;
+  }
+
+  /* ---- 投影内搜索：输入 → 候选 → 点一条直接换诗歌 ----
+     与侧边栏同一套规则：开头 A / D / B / C / X / E / Q / T / O 指定诗歌本范围，
+     字母可连写（DB恩典 = 大本 + 补充本）；只列有 PDF 的诗歌；
+     命中结果会作为投影里 ← → 换诗歌的列表，方便连续投同一批诗歌。 */
+  onProjSearchInput() {
+    this.wake();
+    this.updateProjSearchClear();
+    const cur = (this.searchEl.value || '').trim();
+    // 词变了：先收起旧候选（保留 DOM 以便同一个词再次点开时复现），并作废上次候选缓存
+    if (cur !== this._projLastQuery) {
+      this.collapseProjSuggestions();
+      this._projLastQuery = '';
+      this._projPickedUid = null;
+      this._projSuggestScroll = 0;
+    }
+    clearTimeout(this._projSearchTimer);
+    this._projSearchTimer = setTimeout(() => this.updateProjSuggestions(), 90);
+  }
+
+  updateProjSearchClear() {
+    if (!this.searchClearBtn) return;
+    const has = !!(this.searchEl && (this.searchEl.value || '').trim());
+    this.searchClearBtn.style.display = has ? '' : 'none';
+  }
+
+  projHymnMatches(h, keywords) {
+    if (!keywords.length) return true;
+    const meta = (h.code + ' ' + (h.variant || '') + ' ' + (h.title || '') + ' ' + catInfo(h.letter).name).toLowerCase();
+    if (keywords.every((k) => meta.includes(k))) return true;
+    let ly = '';
+    try { ly = (this.plugin && this.plugin.getLyrics ? this.plugin.getLyrics(h.uid) : '') || ''; } catch (e) { /* ignore */ }
+    if (!ly) return false;
+    ly = ly.toLowerCase();
+    return keywords.every((k) => meta.includes(k) || ly.includes(k));
+  }
+
+  updateProjSuggestions() {
+    if (this._closed || !this.suggestEl || !this.searchEl) return;
+    const raw = (this.searchEl.value || '').trim();
+    if (!raw) { this.clearProjSearch(); return; }
+    // 与侧边栏共用前缀解析：DB恩典 只限定范围，真正拿去匹配 / 标出的是「恩典」
+    const scope = parseScope(raw);
+    const keywords = (scope ? scope.keywords : raw.split(/\s+/).filter(Boolean)).map((s) => s.toLowerCase());
+    const all = (this.plugin && this.plugin.hymns) || [];
+    const hits = [];
+    for (const h of all) {
+      if (!h || !h.pdfPath) continue;
+      if (scope && !inScope(h, scope)) continue;
+      if (!this.projHymnMatches(h, keywords)) continue;
+      hits.push(h);
+    }
+    this._projResults = hits.length ? hits : null;
+    this._projLastQuery = raw;
+    this._projPickedUid = null;           // 新一轮搜索，旧的「上次选中」标记作废
+    this._projSuggestScroll = 0;
+    this.renderProjSuggestions(hits, raw, keywords);
+    this.updateChrome();                  // 换诗歌按钮的可用状态跟着搜索结果更新
+  }
+
+  /* 候选框显示全部命中（可滚动），每条 = 编号 + 诗歌名 + 带关键词高亮的歌词片段。 */
+  renderProjSuggestions(list, q, keywords) {
+    const box = this.suggestEl;
+    if (!box) return;
+    box.empty();
+    box.style.display = '';
+    try { box.scrollTop = 0; } catch (e) { /* ignore */ }
+    const kws = (keywords && keywords.length) ? keywords : q.split(/\s+/).filter(Boolean);
+    const head = box.createDiv({ cls: 'hymns-proj-suggest-head' });
+    head.createSpan({
+      cls: 'hymns-proj-suggest-count',
+      text: list.length ? ('找到 ' + list.length + ' 首' + (q ? ' · ' + q : '')) : '没有找到匹配的诗歌',
+    });
+    const clr = head.createEl('button', {
+      cls: 'hymns-proj-suggest-clear', text: '清空',
+      attr: { type: 'button', 'aria-label': '清空搜索框', title: '清空搜索框' },
+    });
+    clr.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.clearProjSearch();
+      try { this.searchEl.focus(); } catch (err) { /* ignore */ }
+    });
+    this._projSuggestItems = [];
+    this._projSuggestEls = [];
+    this._projSuggestIndex = 0;
+    if (!list.length) return;
+    const hit = (s) => kws.length > 0 && kws.some((k) => s.toLowerCase().includes(k));
+    list.forEach((h, i) => {
+      const row = box.createDiv({ cls: 'hymns-proj-suggest-item' + (i === 0 ? ' is-active' : '') });
+      row.dataset.uid = h.uid;
+      const code = String(h.code || '');
+      const codeSpan = row.createSpan({ cls: 'hymns-proj-suggest-code' });
+      if (hit(code)) codeSpan.innerHTML = highlight(code, kws); else codeSpan.setText(code);
+      const main = row.createDiv({ cls: 'hymns-proj-suggest-main' });
+      const titleText = String(h.title || catInfo(h.letter).name || '');
+      const titleSpan = main.createSpan({ cls: 'hymns-proj-suggest-title' });
+      if (hit(titleText)) titleSpan.innerHTML = highlight(titleText, kws); else titleSpan.setText(titleText);
+      let lyrics = '';
+      try { lyrics = (this.plugin && this.plugin.getLyrics ? this.plugin.getLyrics(h.uid) : '') || ''; } catch (e2) { /* ignore */ }
+      if (kws.length && lyrics) {
+        const snippet = lyricsSnippet(lyrics, kws);
+        if (snippet) {
+          const sub = main.createSpan({ cls: 'hymns-proj-suggest-lyrics' });
+          sub.innerHTML = highlight(snippet, kws);
+        }
+      }
+      row.addEventListener('click', (e) => { e.stopPropagation(); this.pickProjHymn(h); });
+      this._projSuggestItems.push(h);
+      this._projSuggestEls.push(row);
+    });
+  }
+
+  moveProjSuggest(dir) {
+    const els = this._projSuggestEls || [];
+    if (!els.length) return;
+    let i = this._projSuggestIndex + dir;
+    if (i < 0) i = 0;
+    if (i >= els.length) i = els.length - 1;
+    this._projSuggestIndex = i;
+    els.forEach((el, n) => el.classList.toggle('is-active', n === i));
+    if (els[i] && els[i].scrollIntoView) { try { els[i].scrollIntoView({ block: 'nearest' }); } catch (e) { /* ignore */ } }
+  }
+
+  /* 只收起、不清空 DOM：同一个搜索词再次点搜索框时，候选内容与滚动位置原样弹回 */
+  collapseProjSuggestions() {
+    if (!this.suggestEl) return;
+    if (this.suggestEl.style.display !== 'none') {
+      this._projSuggestScroll = this.suggestEl.scrollTop || 0;
+      this.suggestEl.style.display = 'none';
+    }
+  }
+
+  /* 再次点搜索框：原样弹回上一次候选，并标出上次选中那首（不重排、不滚动、不重新检索） */
+  reopenProjSuggestions() {
+    const box = this.suggestEl;
+    if (!box || !this._projLastQuery || !this._projSuggestEls || !this._projSuggestEls.length) return false;
+    const cur = ((this.searchEl && this.searchEl.value) || '').trim();
+    if (cur !== this._projLastQuery) return false;   // 词已改，等正常输入搜索，不弹旧结果
+    const wasHidden = box.style.display === 'none';
+    box.style.display = '';
+    // 只在「收起 → 重新弹出」这一步恢复位置并标出上次选中；
+    // 已经开着时再点输入框，不重置用户刚滚动 / 刚用 ↑↓ 选中的位置。
+    if (wasHidden) {
+      try { box.scrollTop = this._projSuggestScroll || 0; } catch (e) { /* ignore */ }
+      this.markPickedProjSuggestion();
+    }
+    return true;
+  }
+
+  /* 标出上次选中的那首，并让键盘 ↑↓ / Enter 从它继续；列表顺序与滚动位置都不动 */
+  markPickedProjSuggestion() {
+    const els = this._projSuggestEls || [];
+    const items = this._projSuggestItems || [];
+    if (!this._projPickedUid) return;
+    const idx = items.findIndex((x) => x && x.uid === this._projPickedUid);
+    if (idx < 0) return;
+    this._projSuggestIndex = idx;
+    els.forEach((el, n) => {
+      el.classList.toggle('is-picked', n === idx);
+      el.classList.toggle('is-active', n === idx);
+    });
+  }
+
+  hideProjSuggestions() {
+    if (this.suggestEl) { this.suggestEl.style.display = 'none'; this.suggestEl.empty(); }
+    this._projSuggestItems = [];
+    this._projSuggestEls = [];
+  }
+
+  clearProjSearch() {
+    clearTimeout(this._projSearchTimer);
+    if (this.searchEl) this.searchEl.value = '';
+    this._projResults = null;
+    this._projLastQuery = '';
+    this._projPickedUid = null;
+    this._projSuggestScroll = 0;
+    this.updateProjSearchClear();
+    this.hideProjSuggestions();
+    try { this.updateChrome(); } catch (e) { /* ignore */ }
+    this.wake();
+  }
+
+  pickProjHymn(h) {
+    if (!h || this._closed) return;
+    const list = this._projResults || [];
+    const i = list.findIndex((x) => x && x.uid === h.uid);
+    this._projPickedUid = h.uid;                 // 再次点搜索框时标出这一首
+    this.collapseProjSuggestions();              // 只收起，DOM 与滚动位置留着复现；搜索词也留着
+    this.setHymn(h, i);                          // i<0 时不会误写侧边栏的 viewIndex
+    this.updateChrome();
+    this.wake();
   }
 
   showTip(text) {
@@ -1818,12 +2521,22 @@ class HymnProjection {
     if (this._closed || !this.el) return;
     this.el.classList.remove('is-idle');
     clearTimeout(this._idleTimer);
+    // 正在输入、或候选框还开着时不自动淡出（否则候选框会跟着工具条一起消失）；
+    // 选完诗歌 / 失焦后恢复 3 秒淡出，投屏时顶部不会一直挂着搜索框。
+    const searching = this.searchEl && (this.docEl.activeElement === this.searchEl ||
+      (this.suggestEl && this.suggestEl.style.display !== 'none'));
+    if (searching) {
+      this._idleTimer = null;
+      return;
+    }
     this._idleTimer = setTimeout(() => {
       if (!this._closed && this.el) this.el.classList.add('is-idle');
     }, 3000);
   }
 
-  /* ---- 翻页手势：触屏左右滑动 ---- */
+  /* ---- 拖拽手势：鼠标与触屏四向完全一致 ----
+     左滑 / 左拖 = 下一首，右滑 / 右拖 = 上一首；下滑 / 下拖 = 上一节，上滑 / 上拖 = 下一节。
+     投影层本身 touch-action: none，竖滑不会被浏览器当成滚动 / 下拉刷新。 */
   bindSwipe() {
     let start = null;
     this.stageEl.addEventListener('pointerdown', (e) => {
@@ -1834,8 +2547,11 @@ class HymnProjection {
       const s = start; start = null;
       if (!s || e.pointerId !== s.id) return;
       const dx = e.clientX - s.x, dy = e.clientY - s.y;
-      if (Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy)) return;
-      this.step(dx > 0 ? -1 : 1);        // 左划 → 下一页；右划 → 上一页
+      const ax = Math.abs(dx), ay = Math.abs(dy);
+      if (Math.max(ax, ay) < 50) return;
+      this.wake();
+      if (ax > ay) this.switchHymn(dx < 0 ? 1 : -1);  // 左：下一首 / 右：上一首
+      else this.step(dy > 0 ? -1 : 1);                // 下：上一节 / 上：下一节
     });
     this.stageEl.addEventListener('pointercancel', () => { start = null; });
   }
@@ -1846,8 +2562,9 @@ class HymnProjection {
   }
   onWheel(e) {
     if (this._closed) return;
-    // 作用在播放条上的滚动交给控件自己处理
+    // 作用在播放条 / 搜索候选框上的滚动交给控件自己处理
     if (this.playbarEl && e.target && this.playbarEl.contains(e.target)) return;
+    if (this.searchWrap && e.target && this.searchWrap.contains(e.target)) return;
     e.preventDefault();
     this.wake();
     const now = Date.now();
@@ -1865,6 +2582,31 @@ class HymnProjection {
   handleKey(e) {
     if (this._closed || e.isComposing) return;
     const k = e.key;
+    // 焦点在投影搜索框 / 候选框里时，全局快捷键全部让位给输入：
+    // 否则打空格就播放、按 P 直接退出投影、按 O 全屏、方向键变成翻页。
+    const t = e && e.target;
+    const inSearch = !!(this.searchEl && (t === this.searchEl ||
+      (this.searchWrap && this.searchWrap.contains && this.searchWrap.contains(t))));
+    if (inSearch) {
+      if (k === 'Escape') {
+        e.preventDefault(); e.stopPropagation();
+        if ((this.searchEl.value || '').trim()) this.clearProjSearch();
+        else { this.hideProjSuggestions(); try { this.searchEl.blur(); } catch (err) { /* ignore */ } }
+        return;
+      }
+      if (k === 'Enter') {
+        e.preventDefault(); e.stopPropagation();
+        const h = (this._projSuggestItems || [])[this._projSuggestIndex || 0];
+        if (h) this.pickProjHymn(h);
+        return;
+      }
+      if (k === 'ArrowDown' || k === 'ArrowUp') {
+        e.preventDefault(); e.stopPropagation();
+        this.moveProjSuggest(k === 'ArrowDown' ? 1 : -1);
+        return;
+      }
+      return;
+    }
     if (k === 'Escape') {
       e.preventDefault(); e.stopPropagation();
       // 无论是否整屏，Esc 都直接退出整个投影（浏览器会顺带退出整屏）
@@ -2056,6 +2798,14 @@ class HymnProjection {
     try { this.win.removeEventListener('resize', this._onResize); } catch (e) { /* ignore */ }
     clearTimeout(this._idleTimer);
     clearTimeout(this._resizeTimer);
+    clearTimeout(this._projSearchTimer);
+    if (this.suggestEl) { try { this.suggestEl.style.display = 'none'; } catch (e) { /* ignore */ } }
+    this._projResults = null;
+    this._projLastQuery = '';
+    this._projPickedUid = null;
+    this._projSuggestScroll = 0;
+    this._projSuggestItems = [];
+    this._projSuggestEls = [];
     this.unbindAudio();
     if (this._canvas) { this.releaseCanvas(this._canvas); this._canvas = null; }
     if (this.pdfDoc) {
@@ -2150,7 +2900,11 @@ class HymnsView extends ItemView {
     const searchWrap = footSearch.createDiv({ cls: 'hymns-search-wrap' });
     this.searchEl = searchWrap.createEl('input', {
       cls: 'hymns-search',
-      attr: { type: 'text', placeholder: '编号(如 D116)或关键词(空格分隔)…' }
+      attr: {
+        type: 'text',
+        placeholder: '编号或关键词…（DB / A 开头可同时搜几本）',
+        title: '开头加 A（全部）/ D（大本）/ B / C / X / E / Q / T / O 可临时搜索指定诗歌本，字母可连写：如「B 恩典」「DB恩典」「D116」；前缀只限定范围，关键词仍会被标出。长按下方分类按钮可返回全部诗歌',
+      }
     });
     this.searchEl.addEventListener('input', () => this.onQueryChanged());
     this.searchEl.addEventListener('keydown', (e) => this.onKey(e));
@@ -2176,7 +2930,8 @@ class HymnsView extends ItemView {
     const footNav = foot.createDiv({ cls: 'hymns-foot-nav' });
     // 分类：单个按钮，显示当前分类名；默认“全部诗歌”，点击弹出分类菜单
     this.catBtn = footNav.createEl('button', { cls: 'hymns-cat-btn', attr: { 'aria-label': '选择分类' } });
-    this.catBtn.addEventListener('click', (e) => { e.stopPropagation(); this.showCatMenu(e); });
+    this.catBtn.addEventListener('click', (e) => this.onCatClick(e));
+    this.bindCatLongPress();
     this.updateCatBtn();
 
     // 翻页：上一页 | 页码 | 下一页（点击页码弹出全部页码，快速跳转）
@@ -2254,6 +3009,9 @@ class HymnsView extends ItemView {
       if (!this._onFullKey) {
         this._onFullKey = (e) => this.onFullscreenHotkey(e);
       }
+      if (!this._onWhiteboardKey) {
+        this._onWhiteboardKey = (e) => this.onWhiteboardHotkey(e);
+      }
       this.containerEl.removeEventListener('pointerdown', this._onPointerDown, true);
       this.containerEl.addEventListener('pointerdown', this._onPointerDown, true);
       if (doc) {
@@ -2261,6 +3019,8 @@ class HymnsView extends ItemView {
         doc.addEventListener('keydown', this._onProjKey, true);
         doc.removeEventListener('keydown', this._onFullKey, true);
         doc.addEventListener('keydown', this._onFullKey, true);
+        doc.removeEventListener('keydown', this._onWhiteboardKey, true);
+        doc.addEventListener('keydown', this._onWhiteboardKey, true);
       }
     } catch (e) { /* ignore */ }
   }
@@ -2571,6 +3331,44 @@ class HymnsView extends ItemView {
     this.openProjection(this.viewHymn);
   }
 
+  /* 预览模式下按 B：在新标签页打开这首诗歌的「白板单页 PDF」。
+     和 P / O 一样，只在焦点确实落在本视图内、且不在输入框里才响应，
+     避免在笔记或搜索框里打字母 b 时误触发。 */
+  onWhiteboardHotkey(e) {
+    if (e.defaultPrevented || e.isComposing) return;
+    if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+    if (e.key !== 'b' && e.key !== 'B') return;
+    if (this.mode !== 'viewer' || !this.viewHymn) return;
+    const t = e.target;
+    if (!t || !this.containerEl.contains(t)) return;
+    if (t.closest && t.closest('input, textarea, select, [contenteditable="true"]')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    this.openWhiteboardPdf(this.viewHymn);
+  }
+
+  /* 查看白板 PDF：生成只含这一首那几页的文件，再在标签页打开，不打开整本合订本。 */
+  async openWhiteboardPdf(h) {
+    if (!h) return;
+    try {
+      const rel = await this.plugin.buildWhiteboardSinglePdf(h);
+      if (!rel) return;
+      const f = this.app.vault.getAbstractFileByPath(rel);
+      if (!(f instanceof TFile)) { new Notice('白板单页 PDF 生成后未能找到文件'); return; }
+      this.app.workspace.getLeaf(true).openFile(f);
+    } catch (e) {
+      new Notice('打开白板 PDF 失败：' + (e && e.message ? e.message : e));
+    }
+  }
+
+  /* 分享白板 PDF：只发这一首那几页，不把整本合订本发出去。 */
+  async shareWhiteboardPdf(h) {
+    if (!h) return;
+    const rel = await this.plugin.buildWhiteboardSinglePdf(h);
+    if (!rel) return;
+    await this.shareFilePath(rel, 'application/pdf', hymnLabel(h));
+  }
+
   /* 预览模式下按 O 直接打开 / 关闭整屏投影（桌面端）。
      - 无投影：直接整屏打开当前诗歌
      - 窗口模式投影已开：放大到整屏
@@ -2633,6 +3431,7 @@ class HymnsView extends ItemView {
       const doc = this.containerEl && this.containerEl.ownerDocument;
       if (doc && this._onProjKey) doc.removeEventListener('keydown', this._onProjKey, true);
       if (doc && this._onFullKey) doc.removeEventListener('keydown', this._onFullKey, true);
+      if (doc && this._onWhiteboardKey) doc.removeEventListener('keydown', this._onWhiteboardKey, true);
     } catch (e) { /* ignore */ }
     // 不再 this.contentEl.empty()：侧边栏“收起”在 Obsidian 里只是把面板隐藏（display:none），
     // 视图其实还在、下次划出不用重建——清空反而会让桌面端收起再划出时丢失 PDF 滚动位置，
@@ -2845,6 +3644,53 @@ class HymnsView extends ItemView {
     this.renderList();
   }
 
+  /* 短按 = 分类菜单；刚被长按处理过就忽略这次 click，避免菜单又弹出来 */
+  onCatClick(e) {
+    if (e && e.stopPropagation) e.stopPropagation();
+    if (this._catLongPressed) { this._catLongPressed = false; return; }
+    this.showCatMenu(e);
+  }
+
+  /* ---- 长按分类按钮：无论当前选的是哪本，一键回到「全部诗歌」 ----
+     短按照旧弹分类菜单；长按触发后抑制紧随其后的 click，避免菜单又弹出来。
+     用 pointer 事件，触屏和鼠标都支持；手指滑动超过 10px 视为翻列表，不算长按。 */
+  bindCatLongPress() {
+    const btn = this.catBtn;
+    if (!btn) return;
+    let timer = null, start = null;
+    this._catLongPressed = false;
+    const cancel = () => { clearTimeout(timer); timer = null; start = null; };
+    btn.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      this._catLongPressed = false;
+      start = { x: e.clientX, y: e.clientY };
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = null;
+        this._catLongPressed = true;      // 让随后那次 click 被上面的守卫忽略
+        this.returnToAllCats();
+      }, 550);
+    });
+    btn.addEventListener('pointermove', (e) => {
+      if (!timer || !start) return;
+      if (Math.abs(e.clientX - start.x) > 10 || Math.abs(e.clientY - start.y) > 10) cancel();
+    });
+    ['pointerup', 'pointercancel', 'pointerleave'].forEach((ev) => btn.addEventListener(ev, cancel));
+    btn.addEventListener('contextmenu', (e) => { if (this._catLongPressed) e.preventDefault(); });
+  }
+
+  /* 长按的实际动作：把「B 恩典」这类跨本前缀去掉，再切回全部诗歌 */
+  returnToAllCats() {
+    const scope = this.parseSearchScope(this.query || '');
+    if (scope) {
+      this.query = scope.rest;
+      if (this.searchEl) this.searchEl.value = this.query;
+    }
+    const changed = !!(this.catFilter || scope);
+    this.setCat(null);
+    new Notice(changed ? '已返回全部诗歌' : '当前已是全部诗歌');
+  }
+
   /* ---- 长按跳转（搜索结果 → 分类位置）----
      在搜索结果里长按一首诗歌：跳到它所在分类的列表位置（方便查看前后诗歌），
      搜索框右侧出现返回按钮；点返回恢复原搜索词/分类/页码/滚动位置；
@@ -2965,16 +3811,30 @@ class HymnsView extends ItemView {
     this.catBtn.empty();
     if (color) { const dot = this.catBtn.createSpan({ cls: 'hymns-cat-dot' }); dot.style.background = color; }
     this.catBtn.append(name);
-    this.catBtn.setAttribute('aria-label', '当前分类：' + name + '（点击切换）');
+    this.catBtn.setAttribute('aria-label', '当前分类：' + name + '（点击切换，长按返回全部诗歌）');
+    this.catBtn.setAttribute('title', '点击切换分类；长按一键返回全部诗歌');
+  }
+
+  /* 兼容旧调用的简版：返回 { cat, rest }。真正带多字母范围的解析见模块级 parseScope。
+     供「长按分类按钮返回全部」这类只需要剥前缀的场景使用。 */
+  parseSearchScope(q) {
+    const s = parseScope(q);
+    if (!s) return null;
+    return { cat: (s.all || !s.cats.length) ? null : s.cats[0], rest: s.rest };
   }
 
   computeList() {
-    const q = this.query.trim();
+    const raw = String(this.query || '').trim();
+    const scope = parseScope(raw);
+    const q = scope ? scope.rest : raw;
     let list = this.hymns;
-    if (this.catFilter === 'O') list = list.filter((h) => !KNOWN_LETTERS.has(h.letter));
+    if (scope) {
+      // 前缀连写多本（如 DB）：命中其中任意一本即可；A = 全库，不再受当前分类限制
+      if (!scope.all) list = list.filter((h) => inScope(h, scope));
+    } else if (this.catFilter === 'O') list = list.filter((h) => !KNOWN_LETTERS.has(h.letter));
     else if (this.catFilter) list = list.filter((h) => h.letter === this.catFilter);
-    if (!q) return this.catFilter ? list.slice() : null;
-    const keywords = q.split(/\s+/).filter(Boolean);
+    if (!q && !scope) return this.catFilter ? list.slice() : null;
+    const keywords = scope ? scope.keywords : q.split(/\s+/).filter(Boolean);
     return list.filter((h) => this.matchAllKeywords(h, keywords)).slice();
   }
 
@@ -3016,6 +3876,7 @@ class HymnsView extends ItemView {
 
     if (list.length === 0) {
       this.resultsEl.createDiv({ cls: 'hymns-empty', text: '未找到匹配的诗歌' });
+      this.resultsEl.createDiv({ cls: 'hymns-empty hymns-empty-tip', text: '小提示：开头加 A（全部）/ D（大本）/ B / C / X / E / Q / T / O 可搜指定诗歌本，不受当前分类限制；字母可连写，如「DB 恩典」= 同时搜大本与补充本' });
       return;
     }
 
@@ -3263,7 +4124,10 @@ class HymnsView extends ItemView {
     const info = el.createDiv({ cls: 'hymns-info' });
     // 一行显示：编号 + 诗歌名字（名字写在编号后面）
     const head = info.createDiv({ cls: 'hymns-head' });
-    const keywords = this.query.trim().split(/\s+/).filter(Boolean);
+    // 高亮必须用「剥掉范围前缀后」的关键词：输入 B恩典 / DB恩典 时，
+    // 范围和检索都按前缀处理，但标出的应只是「恩典」这类真正的搜索词。
+    const scope = parseScope(this.query.trim());
+    const keywords = scope ? scope.keywords : this.query.trim().split(/\s+/).filter(Boolean);
     // 编号与标题同样参与高亮：有些搜索是命中标题（歌词里没有该词），
     // 此时只有把标题中的命中位置标出来，用户才知道为什么这首会被搜出来。
     const hit = (s) => keywords.length > 0 && keywords.some((k) => s.toLowerCase().includes(k.toLowerCase()));
@@ -3338,35 +4202,19 @@ class HymnsView extends ItemView {
      关键：片段截取后会被列表的 3 行省略号（-webkit-line-clamp: 3）截断，
      所以命中词必须落在片段最前面——这里保证关键词距片段开头不超过 12 字，
      否则预览里根本看不到高亮（曾经 pos-40 起截，命中词被挤到第 4 行之后而不可见）。
-     多关键词时最多展示两处命中位置，用 … 连接。 */
+     多关键词时最多展示两处命中位置，用 … 连接。
+     侧边栏列表与投影候选框共用模块级 lyricsSnippet，保证两处看到的片段一致。 */
   buildSnippet(lyrics, keywords) {
-    if (!lyrics) return '';
-    const low = lyrics.toLowerCase();
-    const kws = [];
-    keywords.filter(Boolean).forEach((k) => { const s = k.toLowerCase(); if (!kws.includes(s)) kws.push(s); });
-    const win = [];
-    for (const k of kws) {
-      const pos = low.indexOf(k);
-      if (pos < 0) continue;                                            // 该关键词不在歌词里（可能命中标题）
-      if (win.some((w) => pos >= w.start && pos <= w.end)) continue;    // 已被已有窗口覆盖
-      const lineStart = lyrics.lastIndexOf('\n', Math.max(0, pos - 1)) + 1;
-      // 尽量保留整行；命中词在本行太靠后（>20 字）时再往前收，保证它落在前 20 字内
-      const start = Math.max(0, Math.max(lineStart, pos - 20));
-      const end = Math.min(lyrics.length, Math.max(pos + 46, start + 46));
-      win.push({ start, end });
-      if (win.length >= 2) break;
-    }
-    if (!win.length) return lyrics.slice(0, 80) + (lyrics.length > 80 ? '…' : ''); // 歌词里没有关键词 → 预览开头
-    win.sort((a, b) => a.start - b.start);
-    return win
-      .map((w) => (w.start > 0 ? '…' : '') + lyrics.slice(w.start, w.end) + (w.end < lyrics.length ? '…' : ''))
-      .join(' … ');
+    return lyricsSnippet(lyrics, keywords);
   }
 
-  /* 复制菜单（列表与查看器的“更多”按钮共用）：投影 + 4 个复制项 */
+  /* 复制菜单（列表与查看器的“更多”按钮共用）：白板 + 投影 + 复制项 + 分享 */
   showCopyMenu(h, evt) {
     const menu = new Menu();
-    // 投影放最上面并与复制项分隔：唱诗时最常用的动作
+    // 最上面：白板诗歌（点开只显示这一首那几页，不是整本合订本）
+    menu.addItem((i) => i.setTitle('查看白板PDF').setIcon('file-text').onClick(() => this.openWhiteboardPdf(h)));
+    menu.addSeparator();
+    // 投影：唱诗时最常用的动作
     menu.addItem((i) => i.setTitle('窗口投影').setIcon('presentation').onClick(() => this.openProjection(h)));
     if (!this.app.isMobile) {
       // 桌面端额外提供「全屏投影」：一步进整屏，省去再按 O
@@ -3389,6 +4237,10 @@ class HymnsView extends ItemView {
       .setTitle(mobile ? '分享 PDF' : '复制 PDF 文件')
       .setIcon(mobile ? 'share-2' : 'copy')
       .onClick(() => this.shareFile(h, 'pdf')));
+    menu.addItem((i) => i
+      .setTitle(mobile ? '分享白板PDF' : '复制白板 PDF 文件')
+      .setIcon(mobile ? 'share-2' : 'copy')
+      .onClick(() => this.shareWhiteboardPdf(h)));
     if (h.mp3Path) {
       menu.addItem((i) => i
         .setTitle(mobile ? '分享 MP3' : '复制 MP3 文件')
@@ -3554,8 +4406,15 @@ class HymnsView extends ItemView {
     const isPdf = kind === 'pdf';
     const rel = isPdf ? h.pdfPath : h.mp3Path;
     if (!rel) { new Notice(isPdf ? '该诗歌暂无 PDF' : '该诗歌暂无 MP3'); return; }
-    const mime = isPdf ? 'application/pdf' : 'audio/mpeg';
-    const name = rel.split('/').pop() || (hymnLabel(h) + (isPdf ? '.pdf' : '.mp3'));
+    await this.shareFilePath(rel, isPdf ? 'application/pdf' : 'audio/mpeg', hymnLabel(h));
+  }
+
+  /* 按仓库相对路径分享 / 复制一个文件（PDF、MP3、白板单页共用）。
+     移动端（安卓 / iOS）：调起系统分享面板，可直接发给微信等。
+     桌面端：Electron 没有系统分享面板，改为「复制文件」——写进系统剪贴板后手动粘贴。
+     都不行则退回复制文件路径，至少让用户知道文件在哪。 */
+  async shareFilePath(rel, mime, title) {
+    const name = rel.split('/').pop() || ((title || '文件') + '.pdf');
 
     // —— 系统分享面板（移动端为主）——
     if (navigator.share) {
@@ -3564,7 +4423,7 @@ class HymnsView extends ItemView {
         const file = new File([new Blob([buf], { type: mime })], name, { type: mime });
         // canShare 缺失时按“支持”处理；存在则必须真的能分享文件（只支持文字的环境要跳过）
         if (!navigator.canShare || navigator.canShare({ files: [file] })) {
-          await navigator.share({ files: [file], title: hymnLabel(h) });
+          await navigator.share({ files: [file], title: title || name });
           return;
         }
       } catch (e) {
@@ -3989,6 +4848,7 @@ class HymnsPlugin extends Plugin {
       // 留空 = 扫描整个仓库（零配置即可用；识别靠文件名编号，路径只用于缩小范围）
       pdfFolder: '',
       mp3Folder: '',
+      whiteboardFolder: '',  // 白板诗歌合订本目录（可选），留空 = 全仓库按 b/c/d/e/q/x.pdf 文件名识别
       autoPlayMP3: false,
       playMode: 'sequential',
       pdfFollow: false,     // PDF 联动：选中后侧边栏 PDF 随播放变动，默认关闭
@@ -4002,6 +4862,7 @@ class HymnsPlugin extends Plugin {
     this.recent = data.recent || [];
     this.ensureBuiltinPlaylists();   // 首次加载自动写入内置默认播放列表
     this.hymns = [];
+    this.whiteboardIndex = data.whiteboardIndex || {};   // 各分类白板合订本的「编号 → 页码」缓存
     this.mp3Count = 0;          // 全库 MP3 总数（buildIndex 填充）
     this.hymnByUid = new Map();
     this.groupByCode = new Map();
@@ -4061,7 +4922,7 @@ class HymnsPlugin extends Plugin {
   }
 
   allData() {
-    return { settings: this.settings, playlists: this.playlists, recent: this.recent, removedBuiltinIds: this.removedBuiltinIds };
+    return { settings: this.settings, playlists: this.playlists, recent: this.recent, removedBuiltinIds: this.removedBuiltinIds, whiteboardIndex: this.whiteboardIndex || {} };
   }
   async saveAll() { await this.saveData(this.allData()); }
   /* 保存设置（连同歌单等一并写入同一份 data.json）。
@@ -4136,6 +4997,302 @@ class HymnsPlugin extends Plugin {
       if (t) { h.title = t; n++; }
     }
     return n;
+  }
+
+  /* ============ 白板诗歌（合订本，只取这一首那几页） ============
+     白板 PDF 是「一个分类一本」的合订本（b/c/d/e/q/x.pdf），每首诗歌在书签里
+     都有独立条目并指向它所在的页。这里把书签扫成「编号 → 起止页」索引并缓存，
+     再用 pdf.js 把那几页渲染出来，打包成一个只含这几页的独立 PDF：
+     查看（B 键 / 更多菜单）和分享共用这同一份文件，不会把上百 MB 的整本发出去。
+     识别只看文件名，仓库里任何文件夹都能放；设置页会显示每本的识别与书签读取情况。 */
+
+  /* 全仓库按「文件名 = 单个分类字母」识别 6 本合订本：b / c / d / e / q / x.pdf。
+     放在仓库里任何文件夹都行，不要求目录名叫「白板诗歌」，也不用先填设置。
+     返回 { B: [候选…], C: […], … }，同一分类出现多份时按优先级排好：
+       ① 设置里指定的「白板诗歌文件夹」；② 路径里带「白板诗歌」的文件夹；
+       ③ 体积大的（合订本通常几十 MB，散落的同名小文件多半是别的资料）；④ 路径字典序。
+     索引建立时会依次尝试，直到读到带诗歌书签的那一本。 */
+  whiteboardSourceMap() {
+    const out = { B: [], C: [], D: [], E: [], Q: [], X: [] };
+    const cfg = normalize(this.settings.whiteboardFolder || '');
+    const cfgLower = cfg ? cfg.toLowerCase() + '/' : '';
+    let files = [];
+    try { files = this.app.vault.getFiles() || []; } catch (e) { return out; }
+    for (const f of files) {
+      const p = normalize((f && f.path) || '');
+      const m = p.match(/(?:^|\/)([bcdeqx])\.pdf$/i);
+      if (!m) continue;
+      let file = null;
+      try { file = this.app.vault.getAbstractFileByPath(p); } catch (e2) { file = null; }
+      if (!file) continue;
+      const st = (file.stat || (f && f.stat)) || {};
+      const lower = p.toLowerCase();
+      out[m[1].toUpperCase()].push({
+        path: p, file,
+        size: Number(st.size) || 0,
+        mtime: Number(st.mtime) || 0,
+        sig: String(st.size || 0) + ':' + String(st.mtime || 0),
+        inCfg: !!(cfgLower && lower.startsWith(cfgLower)),
+        inNamed: /(^|\/)白板诗歌\//i.test(p),
+      });
+    }
+    for (const L of Object.keys(out)) {
+      out[L].sort((a, b) => {
+        if (a.inCfg !== b.inCfg) return a.inCfg ? -1 : 1;
+        if (a.inNamed !== b.inNamed) return a.inNamed ? -1 : 1;
+        if (b.size !== a.size) return b.size - a.size;
+        return a.path.localeCompare(b.path);
+      });
+    }
+    return out;
+  }
+
+  whiteboardSourceList(letter) {
+    return this.whiteboardSourceMap()[String(letter || '').toUpperCase()] || [];
+  }
+
+  /* 兼容旧调用：该分类最优先的那一本 */
+  async whiteboardSourceFor(letter) {
+    return this.whiteboardSourceList(letter)[0] || null;
+  }
+
+  /* 兼容旧调用：返回「推荐放单页 PDF」的目录（设置了就用设置，否则第一本所在目录）。
+     实际生成单页时直接用源文件所在目录，见 buildWhiteboardSinglePdf。 */
+  async resolveWhiteboardFolder() {
+    const cfg = normalize(this.settings.whiteboardFolder || '');
+    if (cfg) return cfg;
+    const map = this.whiteboardSourceMap();
+    for (const L of ['B', 'C', 'D', 'E', 'Q', 'X']) {
+      if (map[L] && map[L][0]) return map[L][0].path.replace(/\/[^/]+$/, '');
+    }
+    return '';
+  }
+
+  /* 设置页用：把「识别到了什么、书签读没读」整理成可直接显示的数据 */
+  whiteboardStatus() {
+    const map = this.whiteboardSourceMap();
+    const idx = this.whiteboardIndex || {};
+    const rows = [];
+    for (const L of ['B', 'C', 'D', 'E', 'Q', 'X']) {
+      const src = (map[L] && map[L][0]) || null;
+      const rec = idx[L];
+      const count = (rec && rec.map) ? Object.keys(rec.map).length : 0;
+      const current = !!(src && rec && rec.path === src.path && rec.sig === src.sig && count);
+      rows.push({
+        letter: L, name: catInfo(L).name, src, count, current,
+        stale: !!(src && count && !current),
+        extras: (map[L] || []).length,
+      });
+    }
+    return {
+      rows,
+      found: rows.filter((r) => r.src).length,
+      read: rows.filter((r) => r.current).length,
+      hymns: rows.reduce((n, r) => n + (r.current ? r.count : 0), 0),
+      singles: this.listWhiteboardSingles().length,
+    };
+  }
+
+  /* 设置页「清空单页白板PDF」用：只认插件自己生成的缓存文件——
+     某个目录下的「单页」子文件夹里、文件名以「白板 」开头的 PDF。
+     合订本原文件和用户其它 PDF 一律不动。 */
+  listWhiteboardSingles() {
+    const out = [];
+    let files = [];
+    try { files = this.app.vault.getFiles() || []; } catch (e) { return out; }
+    for (const f of files) {
+      const p = normalize((f && f.path) || '');
+      if (/(^|\/)单页\/白板 [^/]+\.pdf$/i.test(p)) out.push(f);
+    }
+    return out;
+  }
+
+  /* 优先走 Obsidian 回收站（删错还能找回）；旧版没有 trash 就退回 delete，
+     最后才用底层 adapter；单页文件本来就是可以随时重新生成的缓存。 */
+  async clearWhiteboardSingles() {
+    const files = this.listWhiteboardSingles();
+    let deleted = 0, failed = 0;
+    for (const f of files) {
+      let ok = false;
+      try {
+        const v = this.app.vault;
+        if (v && typeof v.trash === 'function') await v.trash(f, false);
+        else if (v && typeof v.delete === 'function') await v.delete(f);
+        else await v.adapter.remove(f.path);
+        ok = true;
+      } catch (e) {
+        try { await this.app.vault.adapter.remove(f.path); ok = true; } catch (e2) { /* ignore */ }
+      }
+      if (ok) deleted++; else failed++;
+    }
+    return { total: files.length, deleted, failed };
+  }
+
+  /* 只扫描当前诗歌所属那一本，避免为查一首 D 类诗歌把 138MB 的 q.pdf 也读进来。
+     结果按「路径 + 文件大小 + 修改时间」缓存：文件没换就直接复用；只挪了位置就改下路径；
+     同名候选有多份时依次尝试，读到带诗歌书签的那本为止。 */
+  async ensureWhiteboardIndex(letter, force) {
+    const L = String(letter || '').toUpperCase();
+    const sources = this.whiteboardSourceList(L);
+    if (!sources.length) return null;
+    if (!this.whiteboardIndex) this.whiteboardIndex = {};
+    const cached = this.whiteboardIndex[L];
+    const hasMap = !!(cached && cached.map && Object.keys(cached.map).length);
+    if (!force && hasMap && sources.some((s) => s.path === cached.path && s.sig === cached.sig)) return cached;
+    // 同一本合订本被挪到别的文件夹：书签没变，只更新路径，不必重读
+    if (!force && hasMap) {
+      const moved = sources.find((s) => s.sig === cached.sig);
+      if (moved) { cached.path = moved.path; return cached; }
+    }
+    const ordered = (cached && cached.path)
+      ? sources.filter((s) => s.path === cached.path).concat(sources.filter((s) => s.path !== cached.path))
+      : sources;
+    for (const src of ordered.slice(0, 3)) {
+      const rec = await this.readWhiteboardIndex(src, L);
+      if (rec && Object.keys(rec.map).length) {
+        this.whiteboardIndex[L] = rec;
+        try { await this.saveAll(); } catch (e5) { /* ignore */ }
+        return rec;
+      }
+    }
+    return cached || null;
+  }
+
+  /* 读一本合订本的书签，生成「编号 → 起止页」索引 */
+  async readWhiteboardIndex(src, L) {
+    let lib, buf;
+    try {
+      lib = await this.ensurePdfLib();
+      buf = await this.app.vault.adapter.readBinary(src.path);
+    } catch (e) {
+      new Notice('白板 PDF 读取失败：' + (e && e.message ? e.message : e));
+      return null;
+    }
+    let doc = null;
+    try {
+      doc = await lib.getDocument({ data: new Uint8Array(buf), isEvalSupported: false }).promise;
+      let outline = null;
+      try { outline = await doc.getOutline(); } catch (e2) { outline = null; }
+      const entries = [];
+      const pageOf = async (o) => {
+        try {
+          let dest = o && o.dest;
+          if (typeof dest === 'string') dest = await doc.getDestination(dest);
+          if (Array.isArray(dest) && dest[0]) return (await doc.getPageIndex(dest[0])) + 1;
+        } catch (e3) { /* ignore */ }
+        return 0;
+      };
+      const walk = async (items) => {
+        for (const it of (items || [])) {
+          const kids = (it && it.items) || [];
+          if (kids.length) { await walk(kids); continue; }   // 分组标题不含诗歌页
+          const parsed = parseWhiteboardTitle(it && it.title);
+          if (!parsed.length) continue;
+          const p = await pageOf(it);
+          if (p > 0) for (const x of parsed) entries.push({ num: x.num, appendix: x.appendix, page: p });
+        }
+      };
+      await walk(Array.isArray(outline) ? outline : []);
+      const numPages = Number(doc.numPages) || 0;
+      entries.sort((a, b) => a.page - b.page || a.num - b.num);
+      const map = {};
+      for (let i = 0; i < entries.length; i++) {
+        const e = entries[i];
+        const next = entries[i + 1];
+        let end = e.page;
+        if (next && next.page > e.page) end = Math.min(next.page - 1, e.page + 3);  // 跨页诗歌的「续」页
+        else if (!next) end = Math.min(e.page + 3, numPages || e.page);
+        const k = (e.appendix ? 'a' : 'n') + e.num;
+        if (!map[k]) map[k] = { start: e.page, end };
+        else if (e.page > map[k].end) map[k].end = Math.min(end, map[k].start + 6);  // 同一编号的变体 / 续页（如 0702-1/2/3）
+      }
+      return { sig: src.sig, path: src.path, numPages, map, builtAt: Date.now() };
+    } catch (e) {
+      console.error('[Hymns] 白板索引建立失败', src.path, e);
+      return null;
+    } finally {
+      if (doc) { try { await doc.destroy(); } catch (e4) { /* ignore */ } }
+    }
+  }
+
+  async whiteboardPagesFor(h) {
+    if (!h) return null;
+    const rec = await this.ensureWhiteboardIndex(h.letter);
+    if (!rec) return null;
+    const num = Number(h.num) || 0;
+    const k = (h.appendix ? 'a' : 'n') + num;
+    const range = rec.map[k];   // 附录不能回退到同号正歌（Ds1 ≠ D001）
+    if (!range) return null;
+    return { path: rec.path, start: range.start, end: range.end };
+  }
+
+  async rebuildWhiteboardIndex() {
+    this.whiteboardIndex = {};
+    try { await this.saveAll(); } catch (e) { /* ignore */ }
+  }
+
+  /* 生成「只含这一首那几页」的 PDF，落到「这本合订本所在目录 / 单页」子目录。
+     合订本放在仓库任何位置都跟着走；同名覆盖，源 PDF 与索引都没变过就直接复用。 */
+  async buildWhiteboardSinglePdf(h) {
+    const loc = await this.whiteboardPagesFor(h);
+    if (!loc) { new Notice('没有找到这首诗歌的白板 PDF 页面'); return null; }
+    const outDir = normalize(loc.path.replace(/\/[^/]+$/, '') + '/单页');
+    try {
+      if (!this.app.vault.getAbstractFileByPath(outDir)) await this.app.vault.createFolder(outDir);
+    } catch (e) { /* 目录已存在 */ }
+    const code = String(h.code || h.uid || '').replace(/[\\/:*?"<>|]/g, '_');
+    const rel = normalize(outDir + '/白板 ' + code + '.pdf');
+    const existing = this.app.vault.getAbstractFileByPath(rel);
+    const srcFile = this.app.vault.getAbstractFileByPath(loc.path);
+    const rec = (this.whiteboardIndex || {})[String(h.letter || '').toUpperCase()] || {};
+    const anchor = Math.max((srcFile && srcFile.stat && srcFile.stat.mtime) || 0, rec.builtAt || 0);
+    if (existing instanceof TFile && existing.stat && existing.stat.mtime >= anchor) return rel;
+
+    const bigMb = ((srcFile && srcFile.stat && srcFile.stat.size) || 0) / 1048576;
+    new Notice(bigMb > 60
+      ? '正在生成这一首的白板单页…（合订本 ' + bigMb.toFixed(0) + ' MB，首次可能要等几秒）'
+      : '正在生成这一首的白板单页…');
+    let lib, buf, doc = null;
+    try {
+      lib = await this.ensurePdfLib();
+      buf = await this.app.vault.adapter.readBinary(loc.path);
+      doc = await lib.getDocument({ data: new Uint8Array(buf), isEvalSupported: false }).promise;
+      const end = Math.max(loc.start, Math.min(loc.end, Number(doc.numPages) || loc.start));
+      const images = [];
+      for (let p = loc.start; p <= end; p++) {
+        const page = await doc.getPage(p);
+        const base = page.getViewport({ scale: 1 });
+        const scale = Math.max(1, Math.min(3, 1500 / (base.width || 600)));
+        const vp = page.getViewport({ scale });
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.ceil(vp.width);
+        canvas.height = Math.ceil(vp.height);
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        await page.render({ canvasContext: ctx, viewport: vp }).promise;
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.88);
+        images.push({
+          pageW: base.width, pageH: base.height,
+          imgW: canvas.width, imgH: canvas.height,
+          jpeg: base64ToBytes(dataUrl.slice(dataUrl.indexOf(',') + 1)),
+        });
+        try { page.cleanup(); } catch (e2) { /* ignore */ }
+        try { canvas.width = 0; canvas.height = 0; } catch (e3) { /* ignore */ }
+      }
+      if (!images.length) throw new Error('没有可渲染的页面');
+      const bytes = buildImagePdf(images);
+      const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+      if (existing instanceof TFile) await this.app.vault.adapter.writeBinary(rel, ab);
+      else await this.app.vault.createBinary(rel, ab);
+      return rel;
+    } catch (e) {
+      console.error('[Hymns] 白板单页生成失败', loc, e);
+      new Notice('白板单页生成失败：' + (e && e.message ? e.message : e));
+      return null;
+    } finally {
+      if (doc) { try { await doc.destroy(); } catch (e4) { /* ignore */ } }
+    }
   }
 
   /* pdf.js 加载：在“隔离作用域”中执行 UMD，绝不写入 window.pdfjsLib / globalThis.pdfjsWorker。

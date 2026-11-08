@@ -254,7 +254,9 @@ button.hymns-icon-btn.hymns-icon-btn.hymns-random-btn:hover { color: var(--inter
   padding: 4px 12px;
   font-size: var(--font-ui-small);
   font-weight: 600;
-  user-select: none;
+  user-select: none; -webkit-user-select: none;
+  -webkit-touch-callout: none;   /* 长按返回全部时别弹出系统的文字/图片菜单 */
+  touch-action: manipulation;
 }
 .hymns-cat-btn:hover { background: var(--background-modifier-hover); }
 .hymns-cat-btn::after { content: '▾'; font-size: 10px; opacity: 0.7; margin-left: auto; }
@@ -477,6 +479,7 @@ button.hymns-icon-btn.hymns-icon-btn svg {
   text-align: center;
   white-space: pre-line;
 }
+.hymns-empty-tip { padding-top: 0; opacity: .8; line-height: 1.5; }
 .hymns-loadmore {
   display: block; width: 100%;
   margin: 8px 0;
@@ -712,6 +715,22 @@ button.hymns-icon-btn.hymns-pl-del:hover { color: var(--text-error); background:
 }
 .hymns-folder-hint.is-error { color: var(--text-error, #e53935); }
 
+/* 设置页：白板诗歌识别情况（每本合订本的路径 / 大小 / 书签状态） */
+.hymns-wb-status { margin: -4px 0 14px; }
+.hymns-wb-body { line-height: 1.6; }
+.hymns-wb-row {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px;
+  padding: 4px 0;
+  border-top: 1px solid var(--background-modifier-border);
+  font-size: var(--font-ui-smaller);
+}
+.hymns-wb-row.is-missing { opacity: .6; }
+.hymns-wb-row.is-ok .hymns-wb-tag { color: var(--text-success, #4caf50); }
+.hymns-wb-tag { flex: 0 0 auto; min-width: 96px; font-weight: 600; }
+.hymns-wb-meta { flex: 0 1 auto; }
+.hymns-wb-path { flex: 1 1 100%; color: var(--text-muted); word-break: break-all; }
+.hymns-wb-status .hymns-scan-actions { margin-top: 10px; }
+
 /* 侧边栏：一首都没扫到时的引导卡片 */
 .hymns-empty-guide {
   border: 1px solid #e53935;
@@ -746,6 +765,7 @@ button.hymns-icon-btn.hymns-pl-del:hover { color: var(--text-error); background:
   position: absolute; inset: 0;
   display: flex; align-items: center; justify-content: center;
   overflow: hidden;
+  touch-action: none;   /* 上下滑要交给投影翻节，别被浏览器当成滚动 / 下拉刷新 */
 }
 .hymns-proj-stage canvas { display: block; background: #fff; }
 
@@ -777,14 +797,97 @@ button.hymns-icon-btn.hymns-pl-del:hover { color: var(--text-error); background:
 .hymns-proj .hymns-proj-grip svg { width: 26px; height: 26px; }
 .hymns-proj.is-fullscreen .hymns-proj-grip { display: none; }
 
-/* 右上角工具：上一页 / 下一页 / 播放 / 全屏 / 退出 */
+/* 顶部工具条：搜索框 + 上一首 / 下一首 / 播放 / 全屏 / 退出。
+   够宽时全部排一行（搜索框弹性让位）；确实放不下时才换成整齐两行：
+   第一行搜索框，第二行整排按钮。按钮打包成 .hymns-proj-actions 一个整体，
+   换行时五个按钮一起走，不会出现「只有关闭按钮掉到第二行」。 */
 .hymns-proj .hymns-proj-tools {
   position: absolute; top: 32px; right: 14px;
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; justify-content: flex-start; flex-wrap: wrap;
+  gap: 8px; max-width: calc(100% - 28px);
   transition: opacity .25s;
 }
 .hymns-proj.is-fullscreen .hymns-proj-tools { top: 14px; }
+
+/* 投影内搜索：输入框 + 清空按钮 + 候选浮层。
+   flex-basis = min-width = 170px：换行判断按「搜索框还能不能用」来算，
+   所以 190px 的行不会硬换行，170px 都保不住时才整体换两行。 */
+.hymns-proj .hymns-proj-search-wrap {
+  position: relative; flex: 1 1 170px; min-width: 170px;
+  display: flex; align-items: center;
+}
+/* 整排按钮：靠右对齐；换行后仍是完整一排 */
+.hymns-proj .hymns-proj-actions {
+  display: flex; align-items: center; gap: 8px;
+  flex: 0 0 auto; margin-left: auto;
+}
+.hymns-proj input.hymns-proj-search {
+  width: 100%; height: 36px; box-sizing: border-box;
+  padding: 0 32px 0 12px;
+  border: 1px solid rgba(255, 255, 255, .25); border-radius: 18px;
+  background: rgba(255, 255, 255, .10); color: #fff;
+  font-size: 13px; outline: none; box-shadow: none;
+}
+.hymns-proj input.hymns-proj-search::placeholder { color: rgba(255, 255, 255, .55); }
+.hymns-proj input.hymns-proj-search:focus { border-color: rgba(255, 255, 255, .55); background: rgba(255, 255, 255, .16); }
+.hymns-proj button.hymns-proj-search-clear {
+  position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+  width: 26px; height: 26px; padding: 0; border: none; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: transparent; color: rgba(255, 255, 255, .75);
+  box-shadow: none; cursor: pointer;
+}
+.hymns-proj button.hymns-proj-search-clear:hover { background: rgba(255, 255, 255, .18); color: #fff; }
+.hymns-proj button.hymns-proj-search-clear svg { width: 14px; height: 14px; }
+.hymns-proj .hymns-proj-suggest {
+  position: absolute; top: calc(100% + 6px); left: 0;
+  width: min(360px, 86vw); max-height: min(380px, 55vh); overflow-y: auto;
+  border: 1px solid rgba(255, 255, 255, .18); border-radius: 8px;
+  background: rgba(24, 24, 28, .97); box-shadow: 0 12px 32px rgba(0, 0, 0, .55);
+  color: #fff; font-size: 13px; z-index: 5;
+}
+.hymns-proj .hymns-proj-suggest-head {
+  position: sticky; top: 0; z-index: 1;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 8px 10px; color: rgba(255, 255, 255, .65);
+  background: rgba(24, 24, 28, .98);
+  border-bottom: 1px solid rgba(255, 255, 255, .12);
+}
+.hymns-proj .hymns-proj-suggest-count { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hymns-proj button.hymns-proj-suggest-clear {
+  flex: 0 0 auto; padding: 2px 8px; border: 1px solid rgba(255, 255, 255, .28);
+  border-radius: 12px; background: rgba(255, 255, 255, .08); color: #fff;
+  font-size: 12px; box-shadow: none; cursor: pointer;
+}
+.hymns-proj button.hymns-proj-suggest-clear:hover { background: rgba(255, 255, 255, .2); }
+/* 每条候选：编号 + 诗歌名 + 带关键词高亮的歌词片段；全部命中都列出，靠滚动浏览 */
+.hymns-proj .hymns-proj-suggest-item {
+  display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px;
+  cursor: pointer; border-bottom: 1px solid rgba(255, 255, 255, .06);
+}
+.hymns-proj .hymns-proj-suggest-item:hover,
+.hymns-proj .hymns-proj-suggest-item.is-active { background: rgba(255, 255, 255, .13); }
+/* 上次选中的那首：再次点开搜索框时单独标出，位置与内容都不变 */
+.hymns-proj .hymns-proj-suggest-item.is-picked {
+  background: rgba(255, 213, 79, .14); box-shadow: inset 3px 0 0 #ffd54f;
+}
+.hymns-proj .hymns-proj-suggest-code { flex: 0 0 auto; font-weight: 600; padding-top: 1px; }
+.hymns-proj .hymns-proj-suggest-main {
+  flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 3px;
+}
+.hymns-proj .hymns-proj-suggest-title {
+  display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .95;
+}
+.hymns-proj .hymns-proj-suggest-lyrics {
+  display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 12px; line-height: 1.35; opacity: .66;
+}
+.hymns-proj .hymns-proj-suggest-item mark {
+  background: rgba(255, 213, 79, .3); color: inherit; border-radius: 2px; padding: 0 1px;
+}
+
 .hymns-proj button.hymns-proj-btn {
+  flex: 0 0 40px;                 /* 按钮不收缩，让搜索框来让位 */
   width: 40px; height: 40px; padding: 0;
   display: flex; align-items: center; justify-content: center;
   border: none; border-radius: 50%;
@@ -796,15 +899,16 @@ button.hymns-icon-btn.hymns-pl-del:hover { color: var(--text-error); background:
 }
 .hymns-proj button.hymns-proj-btn:hover { background: rgba(255, 255, 255, .22); color: #fff; }
 .hymns-proj button.hymns-proj-btn svg { width: 20px; height: 20px; }
-/* 到首页 / 末页时的上下翻页按钮 */
-.hymns-proj button.hymns-proj-page-btn:disabled { opacity: .3; cursor: default; background: rgba(255, 255, 255, .04); }
+/* 上一首 / 下一首：到列表头尾时置灰 */
+.hymns-proj button.hymns-proj-hymn-btn:disabled { opacity: .3; cursor: default; background: rgba(255, 255, 255, .04); }
 
-/* 换诗歌：左右两侧的大按钮（触屏也好点），对应 ← → 键 */
+/* 上一节 / 下一节：左右两侧的大按钮（触屏也好点）。
+   箭头用 ↑ / ↓ 而不是 ← / →，与「↑ ↓ 翻节、← → 换诗歌」一致；下面再标一行文字，避免看错。 */
 .hymns-proj button.hymns-proj-nav {
   position: absolute; top: 50%;
   transform: translateY(-50%);
   width: 64px; height: 96px; padding: 0;
-  display: flex; align-items: center; justify-content: center;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
   border: none; border-radius: 8px;
   background: rgba(255, 255, 255, .06);
   color: rgba(255, 255, 255, .55);
@@ -813,11 +917,12 @@ button.hymns-icon-btn.hymns-pl-del:hover { color: var(--text-error); background:
   transition: opacity .25s, background .15s, color .15s;
 }
 .hymns-proj button.hymns-proj-nav:hover { background: rgba(255, 255, 255, .16); color: #fff; }
-.hymns-proj button.hymns-proj-nav svg { width: 28px; height: 28px; }
+.hymns-proj button.hymns-proj-nav svg { width: 28px; height: 28px; flex: 0 0 auto; }
+.hymns-proj .hymns-proj-nav-label { font-size: 11px; line-height: 1.2; white-space: nowrap; letter-spacing: .5px; opacity: .85; }
 .hymns-proj button.hymns-proj-nav.is-prev { left: 10px; }
 .hymns-proj button.hymns-proj-nav.is-next { right: 10px; }
 .hymns-proj button.hymns-proj-nav:disabled { opacity: .18; cursor: default; background: rgba(255, 255, 255, .04); }
-.hymns-proj.is-single button.hymns-proj-page-btn { display: none; }   /* 只有一页：不显示上下翻页 */
+.hymns-proj.is-single button.hymns-proj-nav { display: none; }   /* 只有一节（一页）：不显示左右翻节按钮 */
 
 /* 底部信息条：诗歌名 / 操作提示 / 页码（播放条展开时让位） */
 .hymns-proj .hymns-proj-bar {
@@ -886,4 +991,16 @@ button.hymns-icon-btn.hymns-pl-del:hover { color: var(--text-error); background:
   .hymns-proj .hymns-proj-hint { display: none; }
   .hymns-proj .hymns-proj-pb-title { max-width: 40%; }
   .hymns-proj button.hymns-proj-nav { width: 44px; height: 120px; background: rgba(255, 255, 255, .05); }
+  .hymns-proj .hymns-proj-nav-label { font-size: 10px; letter-spacing: 0; }
+  .hymns-proj .hymns-proj-search-wrap { flex-basis: 150px; min-width: 150px; }
+  .hymns-proj .hymns-proj-suggest { width: min(360px, 90vw); max-height: min(340px, 52vh); }
+}
+
+/* 窄屏：按钮和间距收小，尽量维持一行；连 150px 搜索框都保不住时才整齐换成两行 */
+@media (max-width: 480px) {
+  .hymns-proj .hymns-proj-tools { gap: 6px; right: 10px; max-width: calc(100% - 20px); }
+  .hymns-proj .hymns-proj-actions { gap: 6px; }
+  .hymns-proj button.hymns-proj-btn { flex-basis: 34px; width: 34px; height: 34px; }
+  .hymns-proj button.hymns-proj-btn svg { width: 18px; height: 18px; }
+  .hymns-proj input.hymns-proj-search { height: 34px; }
 }
