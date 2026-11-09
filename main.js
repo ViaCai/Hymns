@@ -37,6 +37,11 @@ const NO_MEDIA_TIP = '本插件需要诗歌 PDF 和 MP3。由于文件较大，�
    一旦被点开就会一次性读进内存并画满 canvas —— 所以必须同时限制体积与页数。 */
 const PDF_PREVIEW_MAX_PAGES = 10;                  // 单次最多画多少页
 const PDF_PREVIEW_MAX_BYTES = 20 * 1024 * 1024;    // 超过 20MB 不读进内存，直接交给系统阅读器
+/* 预览容器左右各有 8px 内边距（见 styles.css 的 .hymns-viewer-body），
+   画布 width:100% 实际拿到的是「容器宽 - 16」，按这个宽度渲染才不会被拉伸。 */
+const PDF_VIEWER_PADDING_X = 16;
+/* 容器宽度变化超过这个像素才重绘，避免拖侧边栏时每一两像素都重画一遍。 */
+const PDF_RERENDER_MIN_DELTA = 12;
 /* 投影只画当前一页，内存占用与页数无关，因此上限可以放宽；
    超过这条线基本是「整编本合集」这类超大文件，读进内存本身就有风险。 */
 const PDF_PROJECTION_MAX_BYTES = 120 * 1024 * 1024;
@@ -115,6 +120,15 @@ const UPDATE_BASE = 'https://raw.githubusercontent.com/' + UPDATE_REPO + '/' + U
 
 // ==================== 更新日志内容（供弹窗离线展示；缺失时回退到远端 CHANGELOG.md）====================
 const CHANGELOG_CONTENT = {
+  '2.2.1': `## [2.2.1] - 2026-11-09
+
+### 修复
+- **预览诗歌 PDF 变清晰了，拉宽侧边栏也不会越拉越糊**
+  以前在插件里预览诗歌 PDF，字看起来比直接用系统打开同一个文件要虚；把侧边栏拉宽时，画面像被硬拉大，反而更模糊。现在会按屏幕的实际清晰度来绘制，高分屏上一样清楚；侧边栏拉宽、从浮动改成固定、手机转横屏之后，也会按新的宽度重新画清楚。
+  重新画的时候不会清空页面，也不会跳回第一页，原来翻到第几页还停在第几页。拖动侧边栏的过程中为了不卡顿，会等手停下约半秒再变清晰。
+
+小提示：预览里没有单独的放大按钮，字号会跟着侧边栏宽度变；想放大细看，可以点「在新标签页打开 PDF」，用系统自带的阅读器看。`,
+
   '2.2.0': `## [2.2.0] - 2026-11-08
 
 ### 本次更新
@@ -2861,6 +2875,11 @@ class HymnsView extends ItemView {
     this._audioToken = 0;    // 音频读取令牌（切歌并发保护）
     this._pdfDoc = null;
     this._pdfToken = 0;      // PDF 渲染令牌（翻页并发保护）
+    this._pdfCanvases = [];  // 当前预览已画好的画布（按页序），供宽度变化时原地重绘
+    this._pdfRenderWidth = 0;   // 这些画布是按多宽的容器画的
+    this._pdfQuality = 0;       // 这些画布用的栅格化倍率
+    this._pdfRenderDone = false;// 首次渲染是否完成（没画完不重绘）
+    this._pdfRerenderToken = 0; // 重绘并发令牌：新任务一开始，旧任务立刻停手
     this._projection = null; // 当前打开的投影窗口（同一时间只允许一个）
     this.isPlaying = false;
     this._jumpBack = null;   // 长按跳转的返回点：{query, catFilter, page, scrollTop}
@@ -3134,22 +3153,29 @@ class HymnsView extends ItemView {
     if (cw <= 0) { this._wasVisible = false; return; }
     const justShown = !this._wasVisible;
     this._wasVisible = true;
-    // 只切换单列 / 双列布局（搬移工具条等 DOM），绝不因布局或宽度变化重画 PDF。
-    // PDF 画布是 width:100% 自适应的，宽度变了会自动缩放；重画会清空滚动容器再异步重建，
-    // 正是「浮动↔固定切换、转屏、拖窗口时闪一下并回到第一页」的元凶。
+    // 只切换单列 / 双列布局（搬移工具条等 DOM）。PDF 绝不重建 DOM、不清空滚动容器 ——
+    // 那正是「浮动↔固定切换、转屏、拖窗口时闪一下并回到第一页」的元凶。
+    // 但画布位图是按某个宽度栅格化的：容器真的变宽了，就要按新宽度重画一遍，否则
+    // 浏览器会把旧位图拉伸、越拉越糊。rerenderPdfForWidth 只替换位图，不动 DOM、不动滚动。
     this.applyResponsiveColumns();
     if (this.mode !== 'viewer' || !this.viewerBody) return;
+    clearTimeout(this._resizeScrollTimer);
     if (justShown) {
       // 由隐藏变可见：display:none 会把 scrollTop 清零，藏起来按比例恢复，避免先画一帧第一页。
       this.restoreViewerScroll(true);
+      // 隐藏期间宽度可能已变，等布局稳定后静默补一次高清重绘（不闪、不跳页）
+      this._resizeScrollTimer = setTimeout(() => {
+        if (this.mode === 'viewer') this.rerenderPdfForWidth();
+      }, 300);
       return;
     }
-    // 宽度真实变化（浮动↔固定、转屏、拖动）：画布缩放后 scrollHeight 变了，
-    // 按比例把滚动恢复到原来那一页。防抖等布局稳定，避免连续 resize 反复触发。
-    clearTimeout(this._resizeScrollTimer);
+    // 宽度真实变化（浮动↔固定、转屏、拖动）：先按比例把滚动恢复到原来那一页，
+    // 再按新宽度重绘。防抖等布局稳定，避免连续 resize 反复触发。
     this._resizeScrollTimer = setTimeout(() => {
-      if (this.mode === 'viewer') this.restoreViewerScroll(false);
-    }, 150);
+      if (this.mode !== 'viewer') return;
+      this.restoreViewerScroll(false);
+      this.rerenderPdfForWidth();
+    }, 200);
   }
   /* 是否够宽到可以分两列。
      竖屏：阈值 720（右列最窄 260px 时左列还剩约 460px，PDF 与列表都还看得清；
@@ -3254,8 +3280,9 @@ class HymnsView extends ItemView {
       this.contentEl.appendChild(this.playerEl);
       if (this.rightCol.parentNode) this.rightCol.remove();
     }
-    // 注意：这里不重画 PDF。画布 width:100% 会自适应新宽度，重画只会清空滚动、闪一下并回到第一页。
-    // 宽度/布局变化后的滚动位置由 onContainerResize → restoreViewerScroll 按比例恢复。
+    // 注意：这里不重建 PDF 的 DOM（否则会清空滚动、闪一下并回到第一页）。
+    // 画布 width:100% 会先自适应新宽度，随后 onContainerResize → rerenderPdfForWidth
+    // 只把位图按新宽度重画一遍；滚动位置由 restoreViewerScroll 按比例恢复。
   }
 
   /* 随机查阅一首（底部工具条按钮：仅符号）。属于“查阅”行为，
@@ -4537,6 +4564,11 @@ class HymnsView extends ItemView {
   /* 释放 PDF 画布：必须先把宽高显式置 0，让 Chromium 立即回收 GPU 纹理，再从 DOM 移除。
      只 remove() 的话要等 GC，反复翻页时显存只涨不降 → 最终渲染进程崩溃（白屏）。 */
   disposePdfCanvases() {
+    // 画布换了一批 / 被清掉，正在跑的高清重绘必须立刻作废，别把旧页画到新 PDF 上
+    this._pdfRerenderToken = (this._pdfRerenderToken || 0) + 1;
+    this._pdfCanvases = [];
+    this._pdfRenderDone = false;
+    this._pdfRenderWidth = 0;
     if (!this.viewerBody) return;
     this.viewerBody.querySelectorAll('canvas').forEach((c) => {
       try { c.width = 0; c.height = 0; } catch (e) { /* ignore */ }
@@ -4550,6 +4582,98 @@ class HymnsView extends ItemView {
     if (!doc) return;
     try { if (doc.loadingTask && doc.loadingTask.destroy) doc.loadingTask.destroy(); } catch (e) { /* ignore */ }
     try { doc.destroy(); } catch (e) { /* ignore */ }
+  }
+
+  /* ---- PDF 画质：按设备像素栅格化，容器变宽时原地重绘 ----
+     旧做法把画布按 CSS 像素 1:1 画出来（canvas.width = vp.width），再用 width:100% 撑满容器：
+     高分屏上 1 个 CSS 像素其实有 2 个设备像素，本来就糊；侧边栏一拉宽，这张固定分辨率的
+     位图被浏览器越拉越大，字就更虚。原生 PDF 阅读器不会这样，因为它按当前尺寸实时重绘。
+     现在做两件事：
+       1) 位图按 quality 倍栅格化（至少 1.5 倍，高分屏按 dpr、上限 2），viewport 仍用 CSS
+          尺寸，pdf.js 靠 transform 放大到设备像素，文字保持锐利；
+       2) 容器宽度真的变了，把每页先画到离屏画布，再一次性替换显示画布的位图。全程不
+          empty 容器、不销毁 DOM、不重建文档，所以既不会闪，也不会跳回第一页。 */
+  pdfRenderQuality() {
+    const dpr = (typeof window !== 'undefined' && Number(window.devicePixelRatio)) || 1;
+    return Math.min(2, Math.max(1.5, dpr));
+  }
+  /* 画布会显示多宽：viewerBody 左右各有 8px 内边距，canvas 的 width:100% 只拿到内容宽。
+     隐藏态（display:none）返回 0，别拿 0 或猜出来的宽度去画一张糊图。 */
+  pdfAvailableWidth() {
+    if (!this.viewerBody) return 0;
+    const cw = this.viewerBody.clientWidth || 0;
+    if (cw <= 0) return 0;
+    return Math.max(120, Math.round(cw - PDF_VIEWER_PADDING_X));
+  }
+  /* 一页按目标宽度算出的 viewport（CSS 像素尺寸，不含设备倍率） */
+  pdfPageViewport(page, width) {
+    const base = page.getViewport({ scale: 1 });
+    return page.getViewport({ scale: Math.max(0.05, width / base.width) });
+  }
+  /* 把一页画到 canvas 上。offscreen=true 时先画在离屏画布，再同步替换显示画布的位图：
+     改 width/height 会清空画布，但同一帧里立刻 drawImage，浏览器不会画出中间的空帧；
+     CSS 尺寸仍是 100% / auto，页面比例不变 → 布局、滚动高度、滚动位置全都不动。 */
+  async paintPdfPage(page, canvas, width, quality, offscreen) {
+    const vp = this.pdfPageViewport(page, width);
+    const q = quality || this.pdfRenderQuality();
+    const target = offscreen ? document.createElement('canvas') : canvas;
+    const w = Math.max(1, Math.round(vp.width * q));
+    const h = Math.max(1, Math.round(vp.height * q));
+    target.width = w; target.height = h;
+    const ctx = target.getContext('2d', { alpha: false });
+    if (!ctx) throw new Error('无法创建 2D 画布上下文');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, w, h);
+    await page.render({
+      canvasContext: ctx,
+      viewport: vp,
+      transform: q !== 1 ? [q, 0, 0, q, 0, 0] : null,
+    }).promise;
+    if (offscreen) {
+      canvas.width = w; canvas.height = h;
+      const dctx = canvas.getContext('2d', { alpha: false });
+      if (dctx) dctx.drawImage(target, 0, 0);
+      try { target.width = 0; target.height = 0; } catch (e) { /* ignore */ }  // 立刻释放离屏显存
+    }
+    return { width: w, height: h, quality: q, viewport: vp };
+  }
+  /* 容器宽度 / 屏幕像素密度变了：把已画好的每一页按新尺寸重绘一遍。
+     只替换位图，不动 DOM 结构，所以不会闪、不会回到第一页（历史修复的行为保持不变）。 */
+  async rerenderPdfForWidth() {
+    if (this.mode !== 'viewer' || !this.viewerBody || !this._pdfDoc) return;
+    const width = this.pdfAvailableWidth();
+    const quality = this.pdfRenderQuality();
+    if (!width || !this._pdfRenderDone) return;
+    const canvases = this._pdfCanvases;
+    if (!canvases || !canvases.length) return;
+    // 一两像素的抖动或只是拖拽中途的状态：忽略，等真正拉开再画
+    if (Math.abs(width - this._pdfRenderWidth) < PDF_RERENDER_MIN_DELTA && quality === this._pdfQuality) return;
+    const token = (this._pdfRerenderToken = (this._pdfRerenderToken || 0) + 1);
+    const doc = this._pdfDoc;
+    const pdfToken = this._pdfToken;
+    const alive = () => token === this._pdfRerenderToken && pdfToken === this._pdfToken
+      && this._pdfDoc === doc && this.mode === 'viewer';
+    for (let i = 0; i < canvases.length; i++) {
+      const c = canvases[i];
+      if (!alive() || !c || !c.isConnected) return;   // 换歌 / 关预览 / 新重绘已开始
+      let page = null;
+      try {
+        page = await doc.getPage(i + 1);
+        if (!alive() || !c.isConnected) return;
+        await this.paintPdfPage(page, c, width, quality, true);
+      } catch (e) {
+        console.warn('[Hymns] PDF 高清重绘失败', e && e.message);
+        return;
+      } finally {
+        if (page) { try { page.cleanup(); } catch (e2) { /* ignore */ } }
+      }
+      await sleep(0);       // pdf.js 走伪 worker 时在主线程解析，逐页让出，避免拖动卡顿
+    }
+    if (!alive()) return;
+    this._pdfRenderWidth = width;
+    this._pdfQuality = quality;
+    // 位图换了但 CSS 尺寸没变，滚动高度本来就不动；这里只做一次保险校准
+    try { this.restoreViewerScroll(false); } catch (e) { /* ignore */ }
   }
 
   /* 用 pdf.js 将 PDF 渲染到 canvas（跨平台，可靠）；过大 / 失败时回退为资源 URL 内嵌。 */
@@ -4603,7 +4727,14 @@ class HymnsView extends ItemView {
       if (stale()) { try { doc.destroy(); } catch (e2) { /* ignore */ } return; }
       this._pdfDoc = doc;
       body.empty();
-      const targetW = Math.max(200, (body.clientWidth || 320));
+      // 按「内容区宽度」渲染，而不是 clientWidth：canvas 是 width:100%，拿不到左右内边距。
+      // 位图再乘 quality 倍，高分屏 / 侧边栏拉宽时才不会被浏览器硬拉糊。
+      let width = this.pdfAvailableWidth();
+      if (!width) {
+        // 容器还没量到尺寸（刚显示 / 隐藏态）：先按兜底宽度画一版，可见后自动补一次高清重绘
+        width = Math.max(200, ((this.viewerWrap && this.viewerWrap.clientWidth) || 320) - PDF_VIEWER_PADDING_X);
+      }
+      const quality = this.pdfRenderQuality();
       const total = Number(doc.numPages) || 0;
       if (!total) throw new Error('PDF 页数异常，文件可能已损坏');    // 防 numPages 为 NaN/0 时渲染出空白
       const maxPages = Math.min(total, PDF_PREVIEW_MAX_PAGES);
@@ -4611,25 +4742,26 @@ class HymnsView extends ItemView {
         if (stale()) return;                                // 已被新的渲染取代 → 立刻停手
         const page = await doc.getPage(p);
         if (stale()) { try { page.cleanup(); } catch (e2) { /* ignore */ } return; }
-        const baseVp = page.getViewport({ scale: 1 });
-        const scale = targetW / baseVp.width;
-        const vp = page.getViewport({ scale });
         const canvas = document.createElement('canvas');
-        canvas.width = Math.ceil(vp.width);
-        canvas.height = Math.ceil(vp.height);
         canvas.style.width = '100%';
         canvas.style.height = 'auto';
         canvas.style.background = '#fff';
         canvas.style.marginBottom = '8px';
         canvas.style.borderRadius = '4px';
-        const ctx = canvas.getContext('2d');
-        await page.render({ canvasContext: ctx, viewport: vp }).promise;
+        await this.paintPdfPage(page, canvas, width, quality, false);
         page.cleanup();
         if (stale()) { try { canvas.width = 0; canvas.height = 0; } catch (e2) { /* ignore */ } return; }
         body.appendChild(canvas);
+        this._pdfCanvases.push(canvas);
         // 让出主线程：pdf.js 走“伪 worker”（解析在主线程），必须喘口气，否则侧边栏长时间无响应
         await sleep(0);
       }
+      this._pdfRenderWidth = width;
+      this._pdfQuality = quality;
+      this._pdfRenderDone = true;
+      // 首次若用的是兜底宽度，容器量到真实尺寸后立刻补画，避免一上来就是拉伸过的图
+      const real = this.pdfAvailableWidth();
+      if (real && Math.abs(real - width) >= PDF_RERENDER_MIN_DELTA) this.rerenderPdfForWidth();
       // 恢复到上次浏览到的位置：视图被销毁重建后，滚动位置会被重置为顶部。
       // 优先按「比例」换算到新高度（宽度变化后画布缩放，总高度会变），没有比例才用绝对像素。
       try {
