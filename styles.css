@@ -95,6 +95,7 @@
 .hymns-plain-btn:hover { color: var(--text-normal); }
 .hymns-plain-btn svg { width: 16px; height: 16px; }
 .hymns-newtab-btn { margin-left: auto; flex: 0 0 auto; }
+.hymns-launch-btn { margin-left: auto; flex: 0 0 auto; }
 
 .hymns-header {
   padding:10px 10px 6px 10px;
@@ -781,6 +782,49 @@ button.hymns-icon-btn.hymns-pl-del:hover { color: var(--text-error); background:
   pointer-events: none;
 }
 .hymns-proj .hymns-proj-tip:empty { display: none; }
+
+/* 还没有投影内容：铺满舞台的醒目空状态卡片（深色底 + 大标题 + 说明 + 小字示例）。
+   放在 stage 里，位于工具条 / 翻节按钮 / 信息条之下，不挡任何操作。 */
+.hymns-proj .hymns-proj-empty {
+  position: absolute; inset: 0;
+  box-sizing: border-box;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: clamp(12px, 2.2vh, 26px);
+  padding: 24px;
+  text-align: center;
+  pointer-events: none;
+  background: radial-gradient(ellipse 80% 70% at 50% 48%, #2a2545 0%, #1c1934 58%, #121024 100%);
+}
+.hymns-proj .hymns-proj-empty-title {
+  color: #fff;
+  font-size: clamp(26px, 3.4vw, 44px);
+  font-weight: 800;
+  letter-spacing: .08em;
+  line-height: 1.3;
+  text-shadow: 0 2px 22px rgba(0, 0, 0, .45);
+}
+.hymns-proj .hymns-proj-empty-sub {
+  max-width: 88%;
+  color: rgba(255, 255, 255, .74);
+  font-size: clamp(14px, 1.5vw, 20px);
+  line-height: 1.7;
+}
+.hymns-proj .hymns-proj-empty-eg {
+  max-width: 88%;
+  color: rgba(255, 255, 255, .42);
+  font-size: clamp(12px, 1.1vw, 15px);
+  letter-spacing: .02em;
+  line-height: 1.7;
+}
+/* 空状态时工具条常驻，提示里让用户「在上方搜索框输入」才有着落 */
+.hymns-proj.is-empty.is-idle .hymns-proj-tools { opacity: 1; pointer-events: auto; }
+@media (max-width: 640px) {
+  .hymns-proj .hymns-proj-empty { gap: 14px; padding: 18px; }
+  .hymns-proj .hymns-proj-empty-title { font-size: 26px; }
+  .hymns-proj .hymns-proj-empty-sub { font-size: 15px; }
+  .hymns-proj .hymns-proj-empty-eg { font-size: 12px; }
+}
 
 /* 顶部把手：窗口模式下按住可拖动投影面板；双击复位（整屏时隐藏） */
 .hymns-proj .hymns-proj-grip {

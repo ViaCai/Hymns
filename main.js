@@ -120,6 +120,21 @@ const UPDATE_BASE = 'https://raw.githubusercontent.com/' + UPDATE_REPO + '/' + U
 
 // ==================== 更新日志内容（供弹窗离线展示；缺失时回退到远端 CHANGELOG.md）====================
 const CHANGELOG_CONTENT = {
+  '2.3.0': `## [2.3.0] - 2026-11-11
+
+### 本次更新
+- **右上角一个按钮，三种打开方式**：点一下就能选「窗口投影 / 全屏投影 / 新标签页打开」。
+- **四个快捷键，不点按钮也能用**（在输入框里打字时不会误触发）：
+  - O 全屏投影、P 窗口投影；再按一次就关掉，两个键互相按还能在两种投影间切换。
+  - [ 新标签页打开诗歌首页；] 用系统自带的 PDF 阅读器打开当前这首的 PDF，和预览工具栏那个「在新标签打开 PDF」按钮一样。
+- **不会越开越多**：首页标签页、PDF 标签页各最多一个，换一首诗歌会换成新内容，不会一直新建标签页。
+- **没预览诗歌也能开投影**：画面上会有醒目的提示卡，照着在上方搜索框选一首、或按 ← → 挑一首就能投；新标签页则停在诗歌首页。
+
+### 修复
+- 退回诗歌列表后再开投影，不会再冒出上一首预览过的诗歌。
+
+小提示：投影里 ↑ ↓ 翻页、← → 换诗歌、空格播放、Esc 退出，都和以前一样。`,
+
   '2.2.1': `## [2.2.1] - 2026-11-09
 
 ### 修复
@@ -2048,7 +2063,7 @@ class HymnProjection {
     if (this.isDesktop) {
       this.fsBtn = this.actionsEl.createEl('button', { cls: 'hymns-proj-btn', attr: { 'aria-label': '全屏投影（O）', title: '全屏投影（O）' } });
       setIcon(this.fsBtn, 'maximize');
-      this.fsBtn.addEventListener('click', () => this.toggleFullscreen());
+      this.fsBtn.addEventListener('click', () => this.setFullscreen(!this._fullscreen));
     }
     this.closeBtn = this.actionsEl.createEl('button', { cls: 'hymns-proj-btn', attr: { 'aria-label': '退出投影（Esc / P）', title: '退出投影（Esc / P）' } });
     setIcon(this.closeBtn, 'x');
@@ -2068,7 +2083,7 @@ class HymnProjection {
 
     // 底部信息条：诗歌名 / 操作提示 / 页码
     this.barEl = el.createDiv({ cls: 'hymns-proj-bar' });
-    this.titleEl = this.barEl.createSpan({ cls: 'hymns-proj-title', text: hymnLabel(this.hymn) });
+    this.titleEl = this.barEl.createSpan({ cls: 'hymns-proj-title', text: this.hymn ? hymnLabel(this.hymn) : '诗歌投影' });
     const hint = '↑ ↓ 翻节 · ← → 换诗歌 · 左右拖/滑 换诗歌 · 上下拖/滑 翻节 · 滚轮 翻节 · 顶部搜索 换诗歌 · 空格 播放' + (this.isDesktop ? ' · O 全屏' : '') + ' · P / Esc 退出';
     this.barEl.createSpan({ cls: 'hymns-proj-hint', text: hint });
     this.pageEl = this.barEl.createSpan({ cls: 'hymns-proj-page', text: '' });
@@ -2093,10 +2108,14 @@ class HymnProjection {
     this.updateChrome();
     this.syncPlayState();
     try { el.focus({ preventScroll: true }); } catch (e) { /* ignore */ }
-    this.load();
+    if (this.hymn) {
+      this.load();
+    } else {
+      this.showEmptyHint();   // 没有目标诗歌：显示提示，不读 PDF；可在投影内搜索 / ← → 选择后自动加载
+    }
     if (this._startFs && this.isDesktop) {
       // 打开即进整屏：必须在用户手势内调用（菜单点击 / O 键都是手势）
-      this.toggleFullscreen();
+      this.setFullscreen(true);
     }
   }
 
@@ -2107,7 +2126,7 @@ class HymnProjection {
     setIcon(this.barPlayBtn, 'play');
     this.barPlayBtn.addEventListener('click', () => this.togglePlay());
 
-    this.pbTitleEl = bar.createSpan({ cls: 'hymns-proj-pb-title', text: hymnLabel(this.hymn) });
+    this.pbTitleEl = bar.createSpan({ cls: 'hymns-proj-pb-title', text: this.hymn ? hymnLabel(this.hymn) : '诗歌投影' });
 
     this.seekEl = bar.createEl('input', { cls: 'hymns-proj-pb-seek', attr: { type: 'range', min: '0', max: '100', step: '1', value: '0' } });
     this.seekEl.addEventListener('input', () => {
@@ -2129,6 +2148,7 @@ class HymnProjection {
 
   /* 读取并打开 PDF；整个过程都在投影层内提示，不打断侧边栏 */
   async load() {
+    this.hideEmptyHint();               // 有诗歌要加载了，空状态卡片不该再盖着
     const h = this.hymn;
     const path = (h && h.pdfPath) ? String(h.pdfPath) : '';
     if (!path) { this.showTip('该诗歌没有可用的 PDF 路径，无法投影'); return; }
@@ -2166,6 +2186,28 @@ class HymnProjection {
       console.error('[Hymns] 投影打开 PDF 失败', path, e);
       this.showTip('PDF 打开失败：' + ((e && e.message) || e));
     }
+  }
+
+  /* 没有目标诗歌时（例如没在预览就按 O / P 打开投影）：铺一张醒目的空状态卡片，不读 PDF。
+     版式是大屏三段式：深色底 + 大号加粗白标题 + 浅灰说明 + 更淡的小字示例，居中。
+     用户可在上方搜索框选一首、或按 ← / → 浏览；选到后 setHymn 会撤掉卡片并加载 PDF。 */
+  showEmptyHint() {
+    if (this.titleEl) this.titleEl.setText('诗歌投影');
+    if (this.pbTitleEl) this.pbTitleEl.setText('诗歌投影');
+    this.showTip('');                       // 清掉「正在打开投影…」，避免和卡片叠字
+    if (!this.emptyEl && this.stageEl) {
+      const box = this.stageEl.createDiv({ cls: 'hymns-proj-empty' });
+      box.createDiv({ cls: 'hymns-proj-empty-title', text: '还没有投影内容' });
+      box.createDiv({ cls: 'hymns-proj-empty-sub', text: '在上方搜索框输入诗歌编号或歌名，选中的诗歌会自动投影' });
+      box.createDiv({ cls: 'hymns-proj-empty-eg', text: '例如：1 · D1 · DB恩典 · 恩典 · 或按 ← / → 浏览诗歌' });
+      this.emptyEl = box;
+    }
+    if (this.emptyEl) this.emptyEl.style.display = '';
+    if (this.el) this.el.classList.add('is-empty');
+  }
+  hideEmptyHint() {
+    if (this.emptyEl) this.emptyEl.style.display = 'none';
+    if (this.el) this.el.classList.remove('is-empty');
   }
 
   /* 页面适配：scale 取「宽比」与「高比」中较小的一个 ⇒ 整页一定装得下，
@@ -2264,8 +2306,8 @@ class HymnProjection {
   switchHymn(dir) {
     if (this._closed || dir === 0) return;
     const { list, i } = this.resolveHymnList();
-    if (i < 0) { new Notice('当前诗歌不在列表里，无法切换'); return; }
     let j = i + dir;
+    if (i < 0) j = (dir > 0 ? 0 : list.length - 1);   // 当前没选诗歌（提示态）：从列表头 / 尾开始选
     while (j >= 0 && j < list.length && !(list[j] && list[j].pdfPath)) j += dir;
     if (j < 0 || j >= list.length) {
       new Notice(dir > 0 ? '已经是列表最后一首' : '已经是列表第一首');
@@ -2280,6 +2322,7 @@ class HymnProjection {
     const wasMine = !!(this._audioEl && !this._audioEl.paused && this.view &&
       this.view.activeHymn && this.hymn && this.view.activeHymn.uid === this.hymn.uid);
     this.hymn = h;
+    this.hideEmptyHint();                 // 选到诗歌 → 立刻撤掉「还没有投影内容」卡片
     // 在投影搜索结果里换诗歌（含 ← → / 触屏滑动）时，让「上次选中」标记跟着当前这一首
     if (this._projResults && this._projResults.some((x) => x && x.uid === h.uid)) this._projPickedUid = h.uid;
     if (this.titleEl) this.titleEl.setText(hymnLabel(h));
@@ -2296,16 +2339,20 @@ class HymnProjection {
     this.updateChrome();
     this.showTip('正在打开投影…');
     this.wake();
-    // 与侧边栏同步：退出投影后按 P 会接着这一首，最近打开也记上这一首
+    // 与侧边栏同步：只在该面板自身也处于预览时同步「当前查看的诗歌」。
+    // 列表模式下不写 viewHymn，否则退出投影后会残留一首，按 O/P 时容易误判成「还在预览」；
+    // 没预览时投影本就该显示空状态提示。最近打开则无论哪种模式都记上这一首。
     const view = this.view;
     if (view) {
-      view.viewHymn = h;
-      // index 只在与侧边栏当前列表对得上时才同步：投影内搜索结果是另一份列表，
-      // 直接写进去会让侧边栏的上一首 / 下一首错位。
-      if (index >= 0 && view.currentList && view.currentList[index] && view.currentList[index].uid === h.uid) {
-        view.viewIndex = index;
+      if (view.mode === 'viewer') {
+        view.viewHymn = h;
+        // index 只在与侧边栏当前列表对得上时才同步：投影内搜索结果是另一份列表，
+        // 直接写进去会让侧边栏的上一首 / 下一首错位。
+        if (index >= 0 && view.currentList && view.currentList[index] && view.currentList[index].uid === h.uid) {
+          view.viewIndex = index;
+        }
+        try { if (typeof view.renderViewer === 'function') view.renderViewer(); } catch (e) { /* ignore */ }
       }
-      try { if (typeof view.renderViewer === 'function') view.renderViewer(); } catch (e) { /* ignore */ }
       if (typeof view.refreshHomeSections === 'function' && typeof view.isWideEnough === 'function' && view.isWideEnough()) {
         try { view.refreshHomeSections(); } catch (e) { /* ignore */ }
       }
@@ -2539,7 +2586,9 @@ class HymnProjection {
     // 选完诗歌 / 失焦后恢复 3 秒淡出，投屏时顶部不会一直挂着搜索框。
     const searching = this.searchEl && (this.docEl.activeElement === this.searchEl ||
       (this.suggestEl && this.suggestEl.style.display !== 'none'));
-    if (searching) {
+    // 空状态（还没有投影内容）时工具条常驻：提示里让用户「在上方搜索框输入」，
+    // 若 3 秒后搜索框自动淡出，用户会看不到入口。选到诗歌后恢复正常淡出。
+    if (searching || !this.hymn) {
       this._idleTimer = null;
       return;
     }
@@ -2595,6 +2644,7 @@ class HymnProjection {
 
   handleKey(e) {
     if (this._closed || e.isComposing) return;
+    if (e._hymnsHandled) return;                 // 同一按键若已被视图层（O/P/[ ]）处理过，这里不再重复处理
     const k = e.key;
     // 焦点在投影搜索框 / 候选框里时，全局快捷键全部让位给输入：
     // 否则打空格就播放、按 P 直接退出投影、按 O 全屏、方向键变成翻页。
@@ -2629,11 +2679,15 @@ class HymnProjection {
     }
     if (k === 'o' || k === 'O') {
       if (!this.isDesktop) return;
-      e.preventDefault(); e.stopPropagation(); this.toggleFullscreen(); return;
+      e.preventDefault(); e.stopPropagation();
+      if (this._fullscreen) this.close(); else this.setFullscreen(true);   // 整屏→关闭；窗口→整屏
+      return;
     }
-    // P 再次按下 = 关闭整个投影（无论是否全屏）。带修饰键时放行（如 Ctrl/Cmd+P 想打印 PDF）
+    // P：窗口投影 → 关闭；整屏投影 → 切回窗口投影。带修饰键时放行（如 Ctrl/Cmd+P 想打印 PDF）
     if ((k === 'p' || k === 'P') && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
-      e.preventDefault(); e.stopPropagation(); this.close(); return;
+      e.preventDefault(); e.stopPropagation();
+      if (this._fullscreen) this.setFullscreen(false); else this.close();
+      return;
     }
     if (k === ' ' || k === 'Spacebar') {
       e.preventDefault(); e.stopPropagation(); this.togglePlay(); return;
@@ -2686,20 +2740,27 @@ class HymnProjection {
     this.el.style.transform = 'translate(' + this._pos.x + 'px,' + this._pos.y + 'px)';
   }
 
-  /* ---- 全屏（桌面端）：O 键 / ⛶ 按钮，再按 O / Esc 退出整屏 ---- */
-  toggleFullscreen() {
+  /* ---- 全屏（桌面端）：O 键 / ⛶ 按钮控制。
+     setFullscreen(true)：当前是窗口投影 → 进入整屏；已是整屏 → 无操作。
+     setFullscreen(false)：当前是整屏 → 退出整屏但保留窗口投影；已是窗口 → 无操作。
+     ⛶ 按钮：窗口 ↔ 整屏来回切换（保留投影）。
+     O 键语义（见 handleKey）：窗口投影 → 整屏；整屏投影 → 直接关闭整个投影。
+     P 键语义（见 handleKey）：整屏投影 → 切回窗口投影；窗口投影 → 关闭。 */
+  setFullscreen(on) {
     const el = this.el;
     if (!el || this._closed) return;
-    if (this._fullscreen) {
-      this._exitFsByToggle = true;            // 点 ⛶ 退出整屏 → 保留窗口投影；ESC 退出不会置位，会被关掉
+    if (on) {
+      if (this._fullscreen) return;
+      if (typeof el.requestFullscreen !== 'function') { new Notice('当前环境不支持整屏投影'); return; }
+      try {
+        const p = el.requestFullscreen({ navigationUI: 'hide' });
+        if (p && typeof p.then === 'function') p.then(() => this.onFullscreenChange()).catch(() => { /* ignore */ });
+      } catch (e) { /* ignore */ }
+    } else {
+      if (!this._fullscreen) return;
+      this._exitFsByToggle = true;            // 主动退出整屏 → 保留窗口投影
       try { if (this.docEl.fullscreenElement) this.docEl.exitFullscreen(); } catch (e) { /* ignore */ }
-      return;
     }
-    if (typeof el.requestFullscreen !== 'function') { new Notice('当前环境不支持整屏投影'); return; }
-    try {
-      const p = el.requestFullscreen({ navigationUI: 'hide' });
-      if (p && typeof p.then === 'function') p.then(() => this.onFullscreenChange()).catch(() => { /* ignore */ });
-    } catch (e) { /* ignore */ }
   }
   onFullscreenChange() {
     if (this._closed || !this.el) return;
@@ -2765,7 +2826,7 @@ class HymnProjection {
   }
   syncPlayState() {
     const a = this._audioEl;
-    const mine = !!(a && this.view && this.view.activeHymn && this.view.activeHymn.uid === this.hymn.uid);
+    const mine = !!(a && this.view && this.view.activeHymn && this.hymn && this.view.activeHymn.uid === this.hymn.uid);
     const playing = !!(a && !a.paused && !a.ended && mine);
     if (playing !== this._lastPlaying) {
       this._lastPlaying = playing;
@@ -2880,7 +2941,7 @@ class HymnsView extends ItemView {
     this._pdfQuality = 0;       // 这些画布用的栅格化倍率
     this._pdfRenderDone = false;// 首次渲染是否完成（没画完不重绘）
     this._pdfRerenderToken = 0; // 重绘并发令牌：新任务一开始，旧任务立刻停手
-    this._projection = null; // 当前打开的投影窗口（同一时间只允许一个）
+    // 投影实例是插件级单例（plugin._projection），不在视图上另存一份，避免多个面板各记各的
     this.isPlaying = false;
     this._jumpBack = null;   // 长按跳转的返回点：{query, catFilter, page, scrollTop}
     this._jumpUid = null;    // 长按跳转后需要高亮显示的诗歌 uid
@@ -2899,8 +2960,8 @@ class HymnsView extends ItemView {
     const titleRow = header.createDiv({ cls: 'hymns-title' });
     titleRow.createSpan({ text: '诗歌 Hymns' });
     this.countEl = titleRow.createSpan({ cls: 'hymns-count' });
-    // 标题栏最右侧：在新标签页打开本插件（只有一个符号，没有按钮方框）
-    this.createNewTabButton(titleRow);
+    // 标题栏最右侧：统一启动按钮（窗口投影 / 全屏投影 / 新标签页打开）
+    this.createLaunchButton(titleRow);
 
     this.resultsEl = this.listWrap.createDiv({ cls: 'hymns-results' });
 
@@ -3031,6 +3092,12 @@ class HymnsView extends ItemView {
       if (!this._onWhiteboardKey) {
         this._onWhiteboardKey = (e) => this.onWhiteboardHotkey(e);
       }
+      if (!this._onNewTabKey) {
+        this._onNewTabKey = (e) => this.onNewTabHotkey(e);
+      }
+      if (!this._onPdfNewTabKey) {
+        this._onPdfNewTabKey = (e) => this.onPdfNewTabHotkey(e);
+      }
       this.containerEl.removeEventListener('pointerdown', this._onPointerDown, true);
       this.containerEl.addEventListener('pointerdown', this._onPointerDown, true);
       if (doc) {
@@ -3040,6 +3107,10 @@ class HymnsView extends ItemView {
         doc.addEventListener('keydown', this._onFullKey, true);
         doc.removeEventListener('keydown', this._onWhiteboardKey, true);
         doc.addEventListener('keydown', this._onWhiteboardKey, true);
+        doc.removeEventListener('keydown', this._onNewTabKey, true);
+        doc.addEventListener('keydown', this._onNewTabKey, true);
+        doc.removeEventListener('keydown', this._onPdfNewTabKey, true);
+        doc.addEventListener('keydown', this._onPdfNewTabKey, true);
       }
     } catch (e) { /* ignore */ }
   }
@@ -3098,10 +3169,8 @@ class HymnsView extends ItemView {
     }
   }
 
-  /* ---- 在新标签页打开 ---- */
-  /* 标题栏 / 预览工具栏右上角的纯符号按钮：点击后另开一个标签页显示本插件界面。
-     只有侧边栏里才需要它——标签页 / 主区本身就是大面板，再开一个没有意义，故不创建。 */
-  /* 判断本视图是否位于侧边栏 */
+  /* ---- 启动按钮 / 新标签页 ---- */
+  /* 判断本视图是否位于侧边栏（布局相关逻辑可复用的工具方法）。 */
   isInSidebar() {
     try {
       const ws = this.app && this.app.workspace;
@@ -3119,16 +3188,64 @@ class HymnsView extends ItemView {
       return !!el;
     } catch (e) { return true; }   // 判断不了就保留按钮，避免误删入口
   }
-  createNewTabButton(parent) {
-    if (!this.isInSidebar()) return null;
+  /* 标题栏 / 预览工具栏右上角的统一启动按钮：点一下弹出三选一菜单，列表与预览模式都常驻。
+     没在预览诗歌时投影显示空状态、新标签页显示首页，不会随便挑一首。
+     P = 窗口投影（开/关/切换）、O = 全屏投影（开/关/切换）、
+     [ = 新标签页打开首页、] = 用系统 PDF 阅读器在新标签页打开当前预览的 PDF
+     （与预览工具栏「在新标签打开 PDF」按钮同款）；四个快捷键各自也都能用。 */
+  createLaunchButton(parent) {
     const b = parent.createEl('button', {
-      cls: 'hymns-plain-btn hymns-newtab-btn',
-      attr: { 'aria-label': '在新标签页打开诗歌面板', title: '在新标签页打开' }
+      cls: 'hymns-plain-btn hymns-launch-btn',
+      attr: {
+        'aria-label': '投影 / 新标签页打开',
+        title: '投影 / 新标签页打开（P 窗口投影 · O 全屏投影 · [ 新标签页首页 · ] 阅读器打开PDF）'
+      }
     });
     setIcon(b, 'external-link');
     if (!b.querySelector('svg')) setIcon(b, 'maximize');   // 图标兜底
-    b.addEventListener('click', (e) => { e.stopPropagation(); this.plugin.openHymnsInNewTab(); });
+    b.addEventListener('click', (e) => { e.stopPropagation(); this.showLaunchMenu(e); });
     return b;
+  }
+
+  /* 启动菜单 / 快捷键要操作的“目标诗歌”：仅当正在预览（viewer 模式）时返回那首；
+     没在预览时一律返回 null —— 投影会显示提示、新标签页会显示首页，而不是随便挑一首。 */
+  launchTargetHymn() {
+    if (this.mode === 'viewer' && this.viewHymn) return this.viewHymn;
+    return null;
+  }
+
+  /* 启动投影（菜单 / 快捷键共用）：mode = 'window' | 'fullscreen'。
+     已有一个投影时：相同模式 → 关闭（O/P 即开即关）；不同模式 → 在两种投影之间切换。
+     没有投影时：按指定模式打开（没预览 → 提示态）。 */
+  launchProjection(mode) {
+    const proj = this.plugin._projection;
+    if (proj && !proj._closed) {
+      const wantFs = mode === 'fullscreen';
+      if (proj._fullscreen === wantFs) proj.close();       // 同模式 → 关闭
+      else proj.setFullscreen(wantFs);                     // 异模式 → 切换
+      return;
+    }
+    const h = this.launchTargetHymn();
+    this.openProjection(h || null, mode === 'fullscreen');
+  }
+
+  /* 右上角启动按钮弹出的三选项菜单。
+     目标诗歌 h 可能为空（没在预览）：此时窗口/全屏投影会打开并显示提示，新标签页打开则显示首页。 */
+  showLaunchMenu(evt) {
+    const menu = new Menu();
+    menu.addItem((i) => i.setTitle('窗口投影  (P)').setIcon('presentation')
+      .onClick(() => this.launchProjection('window')));
+    if (!this.app.isMobile) {
+      menu.addItem((i) => i.setTitle('全屏投影  (O)').setIcon('maximize')
+        .onClick(() => this.launchProjection('fullscreen')));
+    }
+    menu.addItem((i) => i.setTitle('新标签页打开  ([)').setIcon('external-link')
+      .onClick(() => this.plugin.openHomeTab()));
+    if (evt && typeof evt.clientX === 'number' && typeof evt.clientY === 'number') {
+      menu.showAtPosition({ x: evt.clientX, y: evt.clientY });
+    } else {
+      menu.showAtPosition({ x: 0, y: 0 });
+    }
   }
 
   /* ---- 单列 / 双列 ----
@@ -3305,20 +3422,24 @@ class HymnsView extends ItemView {
 
   /* ---- 窗口投影 ----
      会众唱诗时把一首诗歌投到大屏：一个屏幕一页 PDF，↑↓ 翻页 / ←→ 换诗歌，Esc / ✕ 退出。
-     入口有三处：列表与查看器的「更多」菜单、预览时按 P。 */
+     入口：右上角启动菜单、列表「更多」菜单、O / P 快捷键；投影本身是插件级单例。 */
   openProjection(h, fullscreen = false) {
-    const hymn = h || this.viewHymn;
-    if (!hymn) { new Notice('请先打开一首诗歌再投影'); return; }
-    if (!hymn.pdfPath) { new Notice('该诗歌暂无 PDF，无法投影'); return; }
-    if (this._projection) { try { this._projection.close(); } catch (e) { /* ignore */ } this._projection = null; }
+    // 只允许在「仍在预览」时回退到 viewHymn。从预览退回列表后 viewHymn 并不会被清掉，
+    // 以前这里无条件 `h || this.viewHymn`，导致退出预览再按 O / P 仍会投影上一首诗歌；
+    // 现在统一走 launchTargetHymn()（列表模式一律 null → 投影显示空状态提示）。
+    const hymn = h || this.launchTargetHymn() || null;
+    // 没有可用诗歌：仍打开投影层并显示提示，而不是弹 Notice 后直接返回；
+    // 有了诗歌却没 PDF 时才提示无法投影。
+    if (hymn && !hymn.pdfPath) { new Notice('该诗歌暂无 PDF，无法投影'); return; }
+    if (this.plugin._projection) { try { this.plugin._projection.close(); } catch (e) { /* ignore */ } this.plugin._projection = null; }
     const startFs = fullscreen && !this.app.isMobile;   // 整屏概念仅桌面端
     const p = new HymnProjection(this.app, this.plugin, hymn, this.containerEl.ownerDocument, this, startFs);
     p.onClose = () => {
-      if (this._projection === p) this._projection = null;
+      if (this.plugin._projection === p) this.plugin._projection = null;
       // 退出投影后把焦点还给预览区，方便立刻再按 P
       if (this.mode === 'viewer') { try { this.viewerWrap.focus({ preventScroll: true }); } catch (e) { /* ignore */ } }
     };
-    this._projection = p;
+    this.plugin._projection = p;
     p.open();
   }
 
@@ -3343,19 +3464,62 @@ class HymnsView extends ItemView {
     this.playForProjection(h);
   }
 
-  /* 预览模式下按 P 投影当前诗歌。
-     只在焦点确实落在本视图内时才响应——否则用户在笔记里打字母 p 也会弹投影。 */
+  /* 按 P：打开 / 关闭「窗口投影」，或在两种投影之间切换。
+     没预览时也能用：没预览 → 打开投影提示态（或切换/关闭已有的投影）。
+     文档级捕获监听，焦点不限于本视图；输入框 / 编辑器里打字时不触发。
+     多个 Hymns 面板（侧边栏 + 新标签页）共用同一份快捷键监听，用 e._hymnsHandled 保证同一次按键只被处理一次。 */
   onProjectionHotkey(e) {
     if (e.defaultPrevented || e.isComposing) return;
     if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
     if (e.key !== 'p' && e.key !== 'P') return;
+    const t = e.target;
+    if (t && t.closest && t.closest('input, textarea, select, [contenteditable="true"]')) return;
+    const proj = this.plugin._projection;
+    if (proj && !proj._closed) {
+      if (proj.el && proj.el.contains(t)) return;        // 焦点就在投影层内 → 交给投影自身处理
+      if (e._hymnsHandled) return;
+      e._hymnsHandled = true;
+      e.preventDefault(); e.stopPropagation();
+      if (proj._fullscreen) proj.setFullscreen(false);    // 整屏投影按 P → 切回窗口投影
+      else proj.close();                                  // 窗口投影按 P → 关闭
+      return;
+    }
+    if (e._hymnsHandled) return;
+    e._hymnsHandled = true;
+    const h = this.launchTargetHymn();
+    e.preventDefault(); e.stopPropagation();
+    this.openProjection(h || null);                      // 没预览 → 打开投影提示态
+  }
+
+  /* 按 [ 在「新标签页」打开首页（诗歌列表）。单例：重复打开只复用/聚焦已有的那个标签页。
+     文档级捕获监听，焦点不限于本视图；输入框 / 编辑器里打字时不触发。 */
+  onNewTabHotkey(e) {
+    if (e.defaultPrevented || e.isComposing) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;     // 不放行 Ctrl/Cmd/Alt；[ 在多数布局需 Shift，故放行 Shift
+    if (e.key !== '[') return;
+    const t = e.target;
+    if (t && t.closest && t.closest('input, textarea, select, [contenteditable="true"]')) return;
+    if (e._hymnsHandled) return;
+    e._hymnsHandled = true;
+    e.preventDefault(); e.stopPropagation();
+    this.plugin.openHomeTab();                            // 固定打开首页（列表）
+  }
+
+  /* 按 ] = 点预览工具栏那个「在新标签打开 PDF」按钮：
+     用 Obsidian 原生 PDF 阅读器打开当前预览诗歌的 PDF 文件（最多只占一个标签页）。
+     仅在预览（viewer）模式下有意义：没在预览则无 PDF 可开，直接忽略。
+     文档级捕获监听，焦点不限于本视图；输入框 / 编辑器里打字时不触发。 */
+  onPdfNewTabHotkey(e) {
+    if (e.defaultPrevented || e.isComposing) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;     // 放行 Shift（多数布局 ] 需 Shift），不放行 Ctrl/Cmd/Alt
+    if (e.key !== ']') return;
     if (this.mode !== 'viewer' || !this.viewHymn) return;
     const t = e.target;
-    if (!t || !this.containerEl.contains(t)) return;
-    if (t.closest && t.closest('input, textarea, select, [contenteditable="true"]')) return;
-    e.preventDefault();
-    e.stopPropagation();
-    this.openProjection(this.viewHymn);
+    if (t && t.closest && t.closest('input, textarea, select, [contenteditable="true"]')) return;
+    if (e._hymnsHandled) return;
+    e._hymnsHandled = true;
+    e.preventDefault(); e.stopPropagation();
+    this.plugin.openPdfInNewTab(this.viewHymn);
   }
 
   /* 预览模式下按 B：在新标签页打开这首诗歌的「白板单页 PDF」。
@@ -3396,33 +3560,31 @@ class HymnsView extends ItemView {
     await this.shareFilePath(rel, 'application/pdf', hymnLabel(h));
   }
 
-  /* 预览模式下按 O 直接打开 / 关闭整屏投影（桌面端）。
-     - 无投影：直接整屏打开当前诗歌
-     - 窗口模式投影已开：放大到整屏
-     - 整屏投影已开：关闭整个投影
-     投影已打开时焦点在投影层（不在侧边栏容器内），此时仍要响应 O；
-     用 stopImmediatePropagation 拦住投影自身的 O 处理，避免双重触发。 */
+  /* 按 O：打开 / 关闭「全屏投影」，或在两种投影之间切换（桌面端）。
+     没预览时也能用：没预览 → 打开全屏投影提示态（或切换/关闭已有的投影）。
+     文档级捕获监听，焦点不限于本视图；输入框 / 编辑器里打字时不触发。 */
   onFullscreenHotkey(e) {
     if (e.defaultPrevented || e.isComposing) return;
     if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
     if (e.key !== 'o' && e.key !== 'O') return;
-    if (this.mode !== 'viewer' || !this.viewHymn) return;
     if (this.app.isMobile) return;                       // 整屏概念仅桌面端
-    if (!this._projection) {
-      // 无投影时只在焦点确实落在视图内才响应——否则在笔记里打字母 o 也会弹投影
-      const t = e.target;
-      if (!t || !this.containerEl.contains(t)) return;
-      if (t.closest && t.closest('input, textarea, select, [contenteditable="true"]')) return;
-    }
-    e.preventDefault();
-    e.stopPropagation();
-    e.stopImmediatePropagation();
-    if (this._projection) {
-      if (this._projection._fullscreen) this._projection.close();
-      else this._projection.toggleFullscreen();
+    const t = e.target;
+    if (t && t.closest && t.closest('input, textarea, select, [contenteditable="true"]')) return;
+    const proj = this.plugin._projection;
+    if (proj && !proj._closed) {
+      if (proj.el && proj.el.contains(t)) return;         // 焦点就在投影层内 → 交给投影自身处理
+      if (e._hymnsHandled) return;
+      e._hymnsHandled = true;
+      e.preventDefault(); e.stopPropagation();
+      if (proj._fullscreen) proj.close();                 // 整屏投影按 O → 关闭
+      else proj.setFullscreen(true);                      // 窗口投影按 O → 切到整屏
       return;
     }
-    this.openProjection(this.viewHymn, true);            // 直接整屏打开
+    if (e._hymnsHandled) return;
+    e._hymnsHandled = true;
+    const h = this.launchTargetHymn();
+    e.preventDefault(); e.stopPropagation();
+    this.openProjection(h || null, true);                 // 直接整屏；没预览 → 提示态
   }
 
   async onClose() {
@@ -3433,7 +3595,8 @@ class HymnsView extends ItemView {
     // 关闭视图前必须释放 PDF 资源（画布 + 文档），否则显存/内存会残留
     this.disposePdfDoc();
     this.disposePdfCanvases();
-    if (this._projection) { try { this._projection.close(); } catch (e) { /* ignore */ } this._projection = null; }
+    const pr = this.plugin._projection;
+    if (pr && pr.view === this) { try { pr.close(); } catch (e) { /* ignore */ } this.plugin._projection = null; }
     if (this._ro) { try { this._ro.disconnect(); } catch (e) { /* ignore */ } this._ro = null; }
     if (this._onWinResize) {
       try {
@@ -3459,6 +3622,8 @@ class HymnsView extends ItemView {
       if (doc && this._onProjKey) doc.removeEventListener('keydown', this._onProjKey, true);
       if (doc && this._onFullKey) doc.removeEventListener('keydown', this._onFullKey, true);
       if (doc && this._onWhiteboardKey) doc.removeEventListener('keydown', this._onWhiteboardKey, true);
+      if (doc && this._onNewTabKey) doc.removeEventListener('keydown', this._onNewTabKey, true);
+      if (doc && this._onPdfNewTabKey) doc.removeEventListener('keydown', this._onPdfNewTabKey, true);
     } catch (e) { /* ignore */ }
     // 不再 this.contentEl.empty()：侧边栏“收起”在 Obsidian 里只是把面板隐藏（display:none），
     // 视图其实还在、下次划出不用重建——清空反而会让桌面端收起再划出时丢失 PDF 滚动位置，
@@ -4500,6 +4665,17 @@ class HymnsView extends ItemView {
   }
   closeViewer() { this.renderListMode(true); }
 
+  /* 让某个面板直接按 uid 预览指定诗歌（而不是停在列表），供外部调用。
+     ] 快捷键与「在新标签打开 PDF」按钮不走这里：它们用系统 PDF 阅读器打开文件。 */
+  previewHymnByUid(uid) {
+    const h = (this.plugin && typeof this.plugin.resolveHymn === 'function')
+      ? this.plugin.resolveHymn(uid)
+      : (this.hymns || []).find((x) => x.uid === uid);
+    if (!h) return false;
+    this.openInViewer(h);
+    return true;
+  }
+
   /* 自动播放（设置项「打开/翻页诗歌时自动播放音频」）：
      查看或翻页到某首诗歌时自动播放它的 MP3——等价于替你按了一次“播放”，
      所以会把正在浏览的列表作为当前播放列表，播放栏的上/下一首才能顺着往下走。
@@ -4556,9 +4732,9 @@ class HymnsView extends ItemView {
     setIcon(close, 'x');
     close.addEventListener('click', () => this.closeViewer());
 
-    // 预览工具栏最右侧：在新标签页打开（列表模式下标题栏那个按钮会随列表一起隐藏，
-    // 这里补一个，保证预览状态下也能随时另开标签页）
-    this.createNewTabButton(this.viewerToolbar);
+    // 预览工具栏最右侧：统一启动按钮（列表模式下标题栏那个按钮会随列表一起隐藏，
+    // 这里补一个，保证预览状态下也能随时投影 / 另开标签页）
+    this.createLaunchButton(this.viewerToolbar);
   }
 
   /* 释放 PDF 画布：必须先把宽高显式置 0，让 Chromium 立即回收 GPU 纹理，再从 DOM 移除。
@@ -4905,11 +5081,12 @@ class HymnsView extends ItemView {
     }
   }
 
+  /* 「在新标签打开 PDF」按钮 / 双击列表：与 ] 快捷键共用插件里的同一实现，
+     用 Obsidian 原生 PDF 阅读器打开 PDF 文件，且全插件最多只占一个标签页。 */
   openInNewTab(h) {
-    const f = this.app.vault.getAbstractFileByPath(h.pdfPath);
-    if (!(f instanceof TFile)) { new Notice('未找到 PDF：' + h.pdfPath); return; }
-    this.app.workspace.getLeaf(true).openFile(f);
-    this.plugin.addRecent(h);
+    if (this.plugin && typeof this.plugin.openPdfInNewTab === 'function') {
+      this.plugin.openPdfInNewTab(h);
+    }
   }
 
   /* ---- 导航（切歌）：只在“当前播放列表”内移动，与正在浏览的列表无关 ---- */
@@ -5050,7 +5227,7 @@ class HymnsPlugin extends Plugin {
 
   onunload() {
     if (this.view && this.view._audioUrl) URL.revokeObjectURL(this.view._audioUrl);
-    if (this.view && this.view._projection) { try { this.view._projection.close(); } catch (e) { /* ignore */ } }
+    if (this._projection) { try { this._projection.close(); } catch (e) { /* ignore */ } }
   }
 
   allData() {
@@ -6291,21 +6468,91 @@ class HymnsPlugin extends Plugin {
     } catch (e) { /* ignore */ }
   }
 
-  /* 在新标签页打开诗歌面板（侧边栏那个可以留着，两边互不干扰）。
+  /* 新建一个 Obsidian 标签页（通用：既可放本插件面板，也可放原生 PDF 阅读器）。
      getLeaf('tab') 需要较新版本的 Obsidian；老版本只认布尔参数，
      传 'tab' 会被当成“新建分栏”，所以取不到时退回 getLeaf(true)。 */
-  async openHymnsInNewTab() {
+  makeHymnsTab() {
     const ws = this.app.workspace;
     let leaf = null;
     try { leaf = ws.getLeaf('tab'); } catch (e) { leaf = null; }
     if (!leaf) leaf = ws.getLeaf(true);
-    if (!leaf) return;
-    await leaf.setViewState({ type: VIEW_TYPE_HYMNS, active: true });
-    ws.revealLeaf(leaf);
+    return leaf;
+  }
+
+  /* 找已存在的「首页」单例标签页：用视图实例上的标记位判断，
+     标签页关掉后重扫 leaves 自然就找不到了，不会拿到失效引用。
+     原生 PDF 标签页是文件视图，由 _pdfFileLeaf 单独管理，不走这里。 */
+  findHymnsTab(flag) {
+    try {
+      const ws = this.app.workspace;
+      const leaves = ws.getLeavesOfType(VIEW_TYPE_HYMNS) || [];
+      for (const l of leaves) { if (l.view && l.view[flag]) return l; }
+    } catch (e) { /* ignore */ }
+    return null;
+  }
+
+  /* 在「新标签页」打开“首页”（诗歌列表）。
+     单例：已有一个首页标签页时只复用/聚焦它，不会无限新建；打开后强制停在首页（列表），
+     即便之前在那页里点开过某首，也会退回列表——满足“打开页面固定为首页”。 */
+  async openHomeTab() {
+    const ws = this.app.workspace;
+    const leaf = this.findHymnsTab('_hymnsHomeTab');
+    if (leaf) {
+      ws.revealLeaf(leaf);
+      if (leaf.view && typeof leaf.view.closeViewer === 'function') {
+        try { leaf.view.closeViewer(); } catch (e2) { /* 退回首页失败不阻断 */ }
+      }
+      return;
+    }
+    const nl = this.makeHymnsTab();
+    if (!nl) return;
+    await nl.setViewState({ type: VIEW_TYPE_HYMNS, active: true });
+    ws.revealLeaf(nl);
+    if (nl.view) nl.view._hymnsHomeTab = true;     // 标记：这是“首页”单例标签页
     // 移动端：从浮动侧边栏点“在新标签页打开”后，Obsidian 会把侧边栏的 leaf 隐藏 /
     // 重建，面板内容可能被清空而留下空白。这里把所有 Hymns 面板再刷一遍，
     // 保证侧边栏与刚开的标签页都正常渲染（索引重建时同样的刷新逻辑，安全）。
     try { this.refreshAllViews(true); } catch (e) { /* 刷新失败不影响主流程 */ }
+  }
+
+  /* 在「新标签页」用 Obsidian 原生 PDF 阅读器打开当前诗歌的 PDF 文件。
+     这就是预览工具栏那个「在新标签打开 PDF」按钮的功能；] 快捷键与双击列表也都走这里，
+     三者行为完全一致（系统阅读器可放大细看，比侧边栏的 pdf.js 预览清楚）。
+     单例：已经开过就复用同一个标签页、换成当前这首（换歌后再按 ] 会跟着变），
+     不会每按一次就无限新建标签页。 */
+  async openPdfInNewTab(h) {
+    if (!h || !h.pdfPath) return;
+    const f = this.app.vault.getAbstractFileByPath(h.pdfPath);
+    if (!(f instanceof TFile)) { new Notice('未找到 PDF：' + h.pdfPath); return; }
+    const ws = this.app.workspace;
+    let leaf = this._pdfFileLeaf || null;
+    if (leaf) {
+      // 标签页可能已被用户关掉：确认它仍在 workspace 里，否则当作不存在
+      let alive = false;
+      try {
+        if (typeof ws.iterateAllLeaves === 'function') {
+          ws.iterateAllLeaves((l) => { if (l === leaf) alive = true; });
+        } else {
+          alive = !!(leaf.view && leaf.view._hymnsPdfFileTab);
+        }
+      } catch (e) { alive = false; }
+      if (!alive) { this._pdfFileLeaf = null; leaf = null; }
+    }
+    if (leaf) {
+      try {
+        const cur = leaf.view && leaf.view.file;
+        if (!cur || cur.path !== f.path) await leaf.openFile(f);
+      } catch (e) { /* 换文件失败不阻断聚焦 */ }
+      try { ws.revealLeaf(leaf); } catch (e) { /* ignore */ }
+    } else {
+      leaf = this.makeHymnsTab();
+      if (!leaf) return;
+      await leaf.openFile(f);
+      try { ws.revealLeaf(leaf); } catch (e) { /* ignore */ }
+      this._pdfFileLeaf = leaf;
+      if (leaf.view) leaf.view._hymnsPdfFileTab = true;   // 标记：这是“PDF”单例标签页
+    }
+    try { this.addRecent(h); } catch (e) { /* 记录最近打开失败不影响主流程 */ }
   }
   async activateView() {
     const { workspace } = this.app;
