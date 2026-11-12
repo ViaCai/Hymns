@@ -826,44 +826,46 @@ button.hymns-icon-btn.hymns-pl-del:hover { color: var(--text-error); background:
   .hymns-proj .hymns-proj-empty-eg { font-size: 12px; }
 }
 
-/* 顶部把手：窗口模式下按住可拖动投影面板；双击复位（整屏时隐藏） */
+/* 顶部拖动带：只有桌面端 Electron 才启用，且完全不可见——不再单独占一行把手。
+   它铺在工具条背后：工具条自动淡出时，按住顶部照样能拖动整个 Obsidian 窗口。
+   移动端 / 网页端由 bindDrag() 直接 display:none，不参与任何拖动。 */
 .hymns-proj .hymns-proj-grip {
   position: absolute; top: 0; left: 0; right: 0;
-  height: 26px;
-  display: flex; align-items: center; justify-content: center;
-  cursor: grab;
-  color: rgba(255, 255, 255, .3);
-  background: linear-gradient(to bottom, rgba(255, 255, 255, .07), rgba(255, 255, 255, 0));
-  transition: color .15s;
+  height: 44px;
+  background: transparent;
+  cursor: default;
 }
-.hymns-proj .hymns-proj-grip:hover { color: rgba(255, 255, 255, .65); }
-.hymns-proj.is-dragging .hymns-proj-grip { cursor: grabbing; color: rgba(255, 255, 255, .75); }
-.hymns-proj .hymns-proj-grip svg { width: 26px; height: 26px; }
-.hymns-proj.is-fullscreen .hymns-proj-grip { display: none; }
+.hymns-proj .hymns-proj-grip svg { display: none; }
 
-/* 顶部工具条：搜索框 + 上一首 / 下一首 / 播放 / 全屏 / 退出。
-   够宽时全部排一行（搜索框弹性让位）；确实放不下时才换成整齐两行：
-   第一行搜索框，第二行整排按钮。按钮打包成 .hymns-proj-actions 一个整体，
-   换行时五个按钮一起走，不会出现「只有关闭按钮掉到第二行」。 */
+/* 顶部工具条：左上角模式按钮 + 搜索框 + 上一首 / 下一首 / 播放 / 全屏 / 退出。
+   整条直接置顶，不再给把手行让位；够宽时全部排一行（搜索框弹性让位），
+   确实放不下时才换成整齐两行：第一行模式按钮 + 搜索框，第二行整排按钮。
+   按钮打包成 .hymns-proj-actions 一个整体，换行时五个按钮一起走。
+   桌面端空白统一留在「模式按钮 ↔ 搜索框」之间：搜索框紧贴右侧按钮组，
+   这块空白同时是按住拖动整个 Obsidian 窗口的着力点。 */
 .hymns-proj .hymns-proj-tools {
-  position: absolute; top: 32px; right: 14px;
+  position: absolute; top: 8px; left: 14px; right: 14px;
   display: flex; align-items: center; justify-content: flex-start; flex-wrap: wrap;
   gap: 8px; max-width: calc(100% - 28px);
   transition: opacity .25s;
 }
-.hymns-proj.is-fullscreen .hymns-proj-tools { top: 14px; }
+.hymns-proj.is-fullscreen .hymns-proj-tools { top: 8px; }
 
 /* 投影内搜索：输入框 + 清空按钮 + 候选浮层。
    flex-basis = min-width = 170px：换行判断按「搜索框还能不能用」来算，
-   所以 190px 的行不会硬换行，170px 都保不住时才整体换两行。 */
+   所以 190px 的行不会硬换行，170px 都保不住时才整体换两行。
+   max-width 限住宽度，margin-left:auto 把剩余空白全推到搜索框左侧，
+   于是搜索框与右侧按钮组紧挨着（≤640px 窄屏在下面回退成靠左）。 */
 .hymns-proj .hymns-proj-search-wrap {
-  position: relative; flex: 1 1 170px; min-width: 170px;
+  position: relative; flex: 1 1 170px; min-width: 170px; max-width: 420px;
+  margin-left: auto;
   display: flex; align-items: center;
 }
-/* 整排按钮：靠右对齐；换行后仍是完整一排 */
+/* 整排按钮：紧跟搜索框。不能再给一份 auto 空白，否则两份 auto 会平分剩余空间，
+   搜索框和按钮之间又被拉开（换行后仍由窄屏规则靠右）。 */
 .hymns-proj .hymns-proj-actions {
   display: flex; align-items: center; gap: 8px;
-  flex: 0 0 auto; margin-left: auto;
+  flex: 0 0 auto;
 }
 .hymns-proj input.hymns-proj-search {
   width: 100%; height: 36px; box-sizing: border-box;
@@ -884,7 +886,8 @@ button.hymns-icon-btn.hymns-pl-del:hover { color: var(--text-error); background:
 .hymns-proj button.hymns-proj-search-clear:hover { background: rgba(255, 255, 255, .18); color: #fff; }
 .hymns-proj button.hymns-proj-search-clear svg { width: 14px; height: 14px; }
 .hymns-proj .hymns-proj-suggest {
-  position: absolute; top: calc(100% + 6px); left: 0;
+  /* 搜索框靠右后候选列表向左展开，否则 360px 宽的下拉会溢出屏幕右边 */
+  position: absolute; top: calc(100% + 6px); right: 0; left: auto;
   width: min(360px, 86vw); max-height: min(380px, 55vh); overflow-y: auto;
   border: 1px solid rgba(255, 255, 255, .18); border-radius: 8px;
   background: rgba(24, 24, 28, .97); box-shadow: 0 12px 32px rgba(0, 0, 0, .55);
@@ -1036,8 +1039,11 @@ button.hymns-icon-btn.hymns-pl-del:hover { color: var(--text-error); background:
   .hymns-proj .hymns-proj-pb-title { max-width: 40%; }
   .hymns-proj button.hymns-proj-nav { width: 44px; height: 120px; background: rgba(255, 255, 255, .05); }
   .hymns-proj .hymns-proj-nav-label { font-size: 10px; letter-spacing: 0; }
-  .hymns-proj .hymns-proj-search-wrap { flex-basis: 150px; min-width: 150px; }
-  .hymns-proj .hymns-proj-suggest { width: min(360px, 90vw); max-height: min(340px, 52vh); }
+  /* 窄屏没有空白可留：搜索框回到模式按钮旁边，按钮组换行后靠右；
+     候选浮层也改回向右展开，免得左溢出。 */
+  .hymns-proj .hymns-proj-search-wrap { margin-left: 0; flex-basis: 150px; min-width: 150px; }
+  .hymns-proj .hymns-proj-actions { margin-left: auto; }
+  .hymns-proj .hymns-proj-suggest { left: 0; right: auto; width: min(360px, 90vw); max-height: min(340px, 52vh); }
 }
 
 /* 窄屏：按钮和间距收小，尽量维持一行；连 150px 搜索框都保不住时才整齐换成两行 */
@@ -1047,4 +1053,173 @@ button.hymns-icon-btn.hymns-pl-del:hover { color: var(--text-error); background:
   .hymns-proj button.hymns-proj-btn { flex-basis: 34px; width: 34px; height: 34px; }
   .hymns-proj button.hymns-proj-btn svg { width: 18px; height: 18px; }
   .hymns-proj input.hymns-proj-search { height: 34px; }
+  /* 模式按钮与搜索框必须留在同一行：把两者压到最小，让整排操作按钮先换行 */
+  .hymns-proj button.hymns-proj-mode-btn { height: 28px; padding: 0 8px; font-size: 12px; }
+  .hymns-proj .hymns-proj-search-wrap { flex-basis: 120px; min-width: 120px; }
 }
+
+
+/* ============ 移动端安全区：状态栏 / 灵动岛别压住投影顶部 ============
+   .hymns-proj 是 fixed + inset:0，子元素全是 absolute，给容器加 padding 并不会
+   把它们推开；因此把四边安全区记成变量，逐个作用到贴边控件与舞台本身。 */
+.hymns-proj {
+  --hymns-safe-top: env(safe-area-inset-top, 0px);
+  --hymns-safe-right: env(safe-area-inset-right, 0px);
+  --hymns-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --hymns-safe-left: env(safe-area-inset-left, 0px);
+  box-sizing: border-box;
+  max-height: 100dvh;
+}
+.hymns-proj .hymns-proj-stage {
+  inset: var(--hymns-safe-top) var(--hymns-safe-right) var(--hymns-safe-bottom) var(--hymns-safe-left);
+}
+.hymns-proj .hymns-proj-grip { top: var(--hymns-safe-top); }
+.hymns-proj .hymns-proj-tools {
+  top: calc(8px + var(--hymns-safe-top));
+  left: calc(14px + var(--hymns-safe-left));
+  right: calc(14px + var(--hymns-safe-right));
+  max-width: calc(100% - 28px - var(--hymns-safe-left) - var(--hymns-safe-right));
+}
+.hymns-proj.is-fullscreen .hymns-proj-tools { top: calc(8px + var(--hymns-safe-top)); }
+.hymns-proj .hymns-proj-bar {
+  bottom: var(--hymns-safe-bottom);
+  box-sizing: border-box;
+  padding-left: calc(18px + var(--hymns-safe-left));
+  padding-right: calc(18px + var(--hymns-safe-right));
+}
+.hymns-proj .hymns-proj-playbar {
+  bottom: var(--hymns-safe-bottom);
+  padding-left: calc(16px + var(--hymns-safe-left));
+  padding-right: calc(16px + var(--hymns-safe-right));
+}
+.hymns-proj button.hymns-proj-nav.is-prev { left: calc(10px + var(--hymns-safe-left)); }
+.hymns-proj button.hymns-proj-nav.is-next { right: calc(10px + var(--hymns-safe-right)); }
+@media (max-width: 480px) {
+  .hymns-proj .hymns-proj-tools {
+    left: calc(10px + var(--hymns-safe-left));
+    right: calc(10px + var(--hymns-safe-right));
+    max-width: calc(100% - 20px - var(--hymns-safe-left) - var(--hymns-safe-right));
+  }
+}
+
+
+/* ============ 左上角模式名 + 投影模式选择菜单 ============
+   菜单挂在投影层内部：整屏投影进入 top layer 后会盖住所有挂在 body 上的浮层。
+   配色全部写死固定值，绝不取宿主的 --text-normal / --background-*。 */
+/* 模式按钮是工具条的第一个 flex 子项，与搜索框同一行（不再是绝对定位的独立一行）。
+   position:relative 只为让下拉菜单相对按钮定位，菜单仍然挂在投影层内部。 */
+.hymns-proj .hymns-proj-mode-wrap {
+  position: relative;
+  flex: 0 0 auto;
+  z-index: 4;
+  -webkit-app-region: no-drag;
+  transition: opacity .25s;
+}
+.hymns-proj.is-idle .hymns-proj-mode-wrap { opacity: 0; pointer-events: none; }
+.hymns-proj.is-empty.is-idle .hymns-proj-mode-wrap { opacity: 1; pointer-events: auto; }
+/* 与 BSAR 左上角「逐节模式 ▾」同款：深色圆角片、14px/600 浅色字、小箭头。
+   配色写死固定值，不取宿主主题变量，免得投影里被主题改成透明字。 */
+.hymns-proj button.hymns-proj-mode-btn {
+  -webkit-app-region: no-drag;
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 30px; padding: 0 10px;
+  border: 0; border-radius: 6px;
+  background: #313140;
+  color: #ececf5;
+  font-size: 14px; font-weight: 600; letter-spacing: 0;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: none;
+}
+.hymns-proj button.hymns-proj-mode-btn:hover { background: #3d3d50; }
+.hymns-proj button.hymns-proj-mode-btn::after { content: '▾'; font-size: 10px; opacity: .65; }
+
+.hymns-proj .hymns-proj-mode-menu {
+  position: absolute; top: calc(100% + 8px); left: 0;
+  min-width: 220px; max-width: calc(100vw - 32px);
+  box-sizing: border-box;
+  padding: 6px;
+  border: 1px solid rgba(255, 255, 255, .16);
+  border-radius: 10px;
+  background: #211d38;
+  color: #f2f0ff;
+  box-shadow: 0 18px 46px rgba(0, 0, 0, .55);
+  z-index: 40;                /* 展开时盖住可能换行的工具条，保持下拉层级清晰 */
+  -webkit-app-region: no-drag;
+}
+.hymns-proj .hymns-proj-mode-menu-title {
+  padding: 8px 10px 4px;
+  font-size: 11px; letter-spacing: .12em;
+  color: #aaa4c9;
+}
+.hymns-proj .hymns-proj-mode-menu-divider {
+  height: 1px; margin: 6px 4px;
+  background: rgba(255, 255, 255, .14);
+}
+.hymns-proj .hymns-proj-mode-menu-item {
+  -webkit-app-region: no-drag;
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 9px 10px;
+  border-radius: 7px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.hymns-proj .hymns-proj-mode-menu-item:hover { background: rgba(255, 255, 255, .10); }
+.hymns-proj .hymns-proj-mode-menu-item.is-current { background: rgba(126, 110, 220, .30); color: #fff; }
+.hymns-proj .hymns-proj-mode-menu-item.is-disabled { color: #7d7897; cursor: default; }
+.hymns-proj .hymns-proj-mode-menu-item.is-disabled:hover { background: rgba(255, 255, 255, .05); }
+.hymns-proj .hymns-proj-mode-menu-key {
+  flex: 0 0 auto;
+  min-width: 20px; padding: 1px 6px;
+  border: 1px solid rgba(255, 255, 255, .18);
+  border-radius: 4px;
+  font-size: 11px; text-align: center;
+  color: #b7b0d6;
+}
+.hymns-proj .hymns-proj-mode-menu-item.is-disabled .hymns-proj-mode-menu-key {
+  color: #7d7897; border-color: rgba(255, 255, 255, .10);
+}
+.hymns-proj .hymns-proj-mode-menu-hint {
+  padding: 2px 10px 8px;
+  font-size: 11px; line-height: 1.5;
+  color: #cba9ff;
+  transition: color .2s;
+}
+.hymns-proj .hymns-proj-mode-menu-hint.is-alert { color: #ffd18a; }
+
+/* 插件未开启时的提示：整屏投影处于 top layer，body 上的 Notice 会被盖住 */
+.hymns-proj .hymns-proj-inline-notice {
+  position: absolute; top: calc(96px + var(--hymns-safe-top)); left: 50%;
+  transform: translateX(-50%) translateY(-6px);
+  max-width: min(520px, calc(100% - 32px));
+  box-sizing: border-box;
+  padding: 10px 16px;
+  border: 1px solid rgba(205, 170, 255, .5);
+  border-radius: 8px;
+  background: rgba(38, 30, 62, .96);
+  color: #f3ecff;
+  font-size: 13px; line-height: 1.6;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .5);
+  opacity: 0; pointer-events: none;
+  transition: opacity .2s, transform .2s;
+  z-index: 30;
+  -webkit-app-region: no-drag;
+}
+.hymns-proj .hymns-proj-inline-notice.is-visible {
+  opacity: 1; transform: translateX(-50%) translateY(0);
+}
+
+/* 桌面端 Electron：拖顶部＝移动整个 Obsidian 窗口，而不是只把投影图层平移。
+   工具条与它背后的不可见拖动带都是 drag 区；交互控件必须显式 no-drag，
+   否则点不中、也拿不到键盘焦点。 */
+.hymns-proj.is-native-drag .hymns-proj-grip,
+.hymns-proj.is-native-drag .hymns-proj-tools { -webkit-app-region: drag; }
+.hymns-proj.is-native-drag .hymns-proj-tools input,
+.hymns-proj.is-native-drag .hymns-proj-tools button,
+.hymns-proj.is-native-drag .hymns-proj-tools .hymns-proj-mode-wrap,
+.hymns-proj.is-native-drag .hymns-proj-tools .hymns-proj-search-wrap,
+.hymns-proj.is-native-drag .hymns-proj-tools .hymns-proj-actions,
+.hymns-proj.is-native-drag .hymns-proj-tools .hymns-proj-suggest { -webkit-app-region: no-drag; }
+/* 移动端绝不接管原生拖动：即便主题 / 宿主把 app-region 带进来也不允许拖走投影层 */
+body.is-mobile .hymns-proj .hymns-proj-grip,
+body.is-mobile .hymns-proj .hymns-proj-tools { -webkit-app-region: no-drag; }

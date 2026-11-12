@@ -120,6 +120,24 @@ const UPDATE_BASE = 'https://raw.githubusercontent.com/' + UPDATE_REPO + '/' + U
 
 // ==================== 更新日志内容（供弹窗离线展示；缺失时回退到远端 CHANGELOG.md）====================
 const CHANGELOG_CONTENT = {
+  '2.5.0': `## [2.5.0] - 2026-11-13
+
+### 本次更新
+- **投影左上角多了模式按钮**：点开就能选「诗歌全屏 / 诗歌窗口」，或切到经文的逐节 / 并列 / 混合投影；点当前模式只是收起菜单，不会关掉投影。
+- **顶部清爽了**：去掉原来那条把手行，模式按钮和搜索框同一行，搜索框紧挨右侧五个按钮；屏幕窄时自动排成两行，不挤不裁切。
+- **拖顶栏＝拖整个 Obsidian 窗口**（桌面端）；手机上不会再出现「只把投影图层拖走」的情况。
+- **插件一启用，侧边栏就有诗歌面板**：不用再点功能区图标，设置里可以关掉，也不会顶掉 Bible 的面板。
+
+### 修复
+- **禁用插件终于真的关掉了**：以前禁用后只剩没样式的空壳，必须重启 Obsidian 才能重新启用；现在「禁用 → 立即重新启用」都正常。
+- **手机投影顶部不再被状态栏 / 灵动岛挡住**。
+- **Esc 更稳**：来回切换投影模式后不再偶尔失灵；菜单开着按 Esc 先收菜单。
+- 没装 Bible Search and Reader 时，菜单里的经文项会置灰并在投影内说明原因，提示不会被全屏盖住。
+
+### 小提示
+- 与经文投影互切建议搭配「Bible Search and Reader」5.1.0 或更新版，两个插件一起更新最省心。
+- 投影里 ↑ ↓ 翻节、← → 翻本次投过的诗歌、空格播放、Esc 退出，都和以前一样。`,
+
   '2.4.0': `## [2.4.0] - 2026-11-12
 
 ### 本次更新
@@ -966,6 +984,14 @@ class HymnsSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName('联动')
       .setDesc('在底部播放栏点「联动」，可分别勾选：MP3 随 PDF 切换（打开/翻页诗歌时自动播放音频）、PDF 随 MP3 切换（切歌时 PDF 自动跟随）。');
+    new Setting(containerEl)
+      .setName('启动时自动打开诗歌侧边栏')
+      .setDesc('安装并启用插件后，自动在右侧边栏生成诗歌面板，无需先点功能区图标。已经开着诗歌面板时不重复新建；关闭此项后仍可用功能区图标或命令打开。')
+      .addToggle((t) => t.setValue(this.plugin.settings.autoOpenSidebar !== false)
+        .onChange(async (v) => {
+          this.plugin.settings.autoOpenSidebar = v;
+          await this.plugin.saveAll();
+        }));
     new Setting(containerEl)
       .setName('重建诗歌索引')
       .setDesc('修改文件夹或增删诗歌后，重新扫描 PDF/MP3（不含歌词正文）。')
@@ -1973,6 +1999,97 @@ function snapshotHymnProjection(p) {
   return { hymn: p.hymn || null, pageNo: p.pageNo || 1 };
 }
 
+/* ============ 与 Bible Search and Reader 的投影联动（镜像对方的同一套约定）============
+   两个插件互不 import、加载顺序也不确定，只靠「DOM 标记 + 插件管理器状态」协同：
+   · 对方插件 id 固定为 bible-search-reader，投影层带 .bible-projection-fullscreen；
+     Q/W/E 由对方插件级监听统一分派，本插件完全让行（不在自己这边重实现一遍）。
+   · 没安装 / 没开启时，按 Q/W/E 或点模式菜单里的经文项要给明确提示，
+     否则用户会以为按键失灵。提示优先渲染进诗歌投影层内部：整屏投影进入
+     top layer 后，挂在 body 上的系统 Notice 会被整块盖住。
+   · 反过来，经文投影菜单里的 O/P 也由对方派发合成按键，交给本插件自己的监听。 */
+const BIBLE_PROJECTION_SELECTOR = '.bible-projection-fullscreen, .bible-proj-fullscreen';
+const BIBLE_REQUIRED_NOTICE = '请先安装并开启 Bible search and reader 插件，才能使用经文投影';
+const BIBLE_REQUIRED_HINT = '需安装并开启 Bible search and reader 插件';
+
+/* 移动端没有「诗歌全屏」：菜单里不摆一个点不动的入口。
+   判定与 BSAR 侧保持一致（Platform / body.is-mobile / UA），桌面端窄窗口仍按桌面处理。 */
+function isHymnsMobileEnv() {
+  try {
+    if (typeof Platform !== 'undefined' && Platform && Platform.isMobile) return true;
+    if (typeof document !== 'undefined' && document.body && document.body.classList &&
+        document.body.classList.contains('is-mobile')) return true;
+    if (typeof navigator !== 'undefined' && navigator.userAgent &&
+        /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)) return true;
+  } catch (e) { /* ignore */ }
+  return false;
+}
+
+/* BSAR 是否已安装并启用：只读 Obsidian 插件管理器的状态，不 import 对方代码。
+   经文投影层已经在 DOM 里时也直接算可用（覆盖插件实例尚未注入的极端情况）。 */
+function isBiblePluginReady(app) {
+  try {
+    const doc = (typeof document !== 'undefined') ? document : null;
+    if (doc && typeof doc.querySelector === 'function' && doc.querySelector(BIBLE_PROJECTION_SELECTOR)) return true;
+    const pm = app && app.plugins;
+    if (!pm) return false;
+    if (pm.enabledPlugins && typeof pm.enabledPlugins.has === 'function' &&
+        pm.enabledPlugins.has('bible-search-reader')) return true;
+    return !!(pm.plugins && pm.plugins['bible-search-reader']);
+  } catch (e) { return false; }
+}
+
+let _bibleNoticeTimer = null;
+function showBibleRequiredNotice(fromEl, forceNotice) {
+  try {
+    const doc = (typeof document !== 'undefined') ? document : null;
+    let overlay = null;
+    // 没有投影在前台时，提示要落在系统通知里，否则写进用户看不见的图层等于没提示
+    if (!forceNotice) {
+      if (fromEl && typeof fromEl.closest === 'function') overlay = fromEl.closest('.hymns-proj');
+      if (!overlay && doc && typeof doc.querySelector === 'function') overlay = doc.querySelector('.hymns-proj');
+    }
+    const cd = (overlay && overlay.ownerDocument) || doc;
+    if (overlay && typeof overlay.appendChild === 'function' &&
+        typeof overlay.querySelector === 'function' && cd && cd.createElement) {
+      let box = overlay.querySelector('.hymns-proj-inline-notice');
+      if (!box) {
+        box = cd.createElement('div');
+        box.className = 'hymns-proj-inline-notice';
+        overlay.appendChild(box);
+      }
+      box.textContent = BIBLE_REQUIRED_NOTICE;
+      if (box.classList && typeof box.classList.add === 'function') box.classList.add('is-visible');
+      // 菜单里那行常驻说明同时闪一下，把「为什么点不动」和置灰项关联起来
+      const hint = overlay.querySelector('.hymns-proj-mode-menu-hint');
+      if (hint && hint.classList && typeof hint.classList.add === 'function') {
+        hint.classList.add('is-alert');
+        setTimeout(() => { try { hint.classList.remove('is-alert'); } catch (e) { /* ignore */ } }, 1600);
+      }
+      if (typeof clearTimeout === 'function') clearTimeout(_bibleNoticeTimer);
+      _bibleNoticeTimer = setTimeout(() => {
+        try { if (box.classList) box.classList.remove('is-visible'); } catch (e) { /* ignore */ }
+      }, 3200);
+      return;
+    }
+  } catch (e) { /* 落到系统 Notice */ }
+  try { new Notice(BIBLE_REQUIRED_NOTICE); } catch (e) { /* ignore */ }
+}
+
+/* 桌面端 Electron 的 -webkit-app-region:drag 能把「拖顶栏」变成「拖整个 Obsidian 窗口」。
+   网页 / 移动端不认识这个属性，仍需退回 JS transform 挪投影层，因此要先做能力探测。 */
+function supportsAppRegionDrag() {
+  try {
+    if (typeof CSS !== 'undefined' && CSS.supports && CSS.supports('-webkit-app-region', 'drag')) return true;
+  } catch (e) { /* ignore */ }
+  try {
+    // Obsidian 桌面端就是 Electron；Platform.isDesktop 比 UA / process 更稳
+    if (typeof Platform !== 'undefined' && Platform && Platform.isDesktop) return true;
+    if (typeof process !== 'undefined' && process.versions && process.versions.electron) return true;
+    if (typeof navigator !== 'undefined' && /Electron\//i.test(navigator.userAgent || '')) return true;
+  } catch (e) { /* ignore */ }
+  return false;
+}
+
 class HymnProjection {
   constructor(app, plugin, hymn, doc, view, startFs = false) {
     this.app = app;
@@ -2030,15 +2147,35 @@ class HymnProjection {
     this.stageEl = el.createDiv({ cls: 'hymns-proj-stage' });
     this.tipEl = el.createDiv({ cls: 'hymns-proj-tip', text: '正在打开投影…' });
 
-    // 顶部把手：窗口模式下按住可拖动投影面板；双击回到铺满窗口
-    this.gripEl = el.createDiv({ cls: 'hymns-proj-grip', attr: { title: '按住拖动投影窗口，双击复位' } });
-    setIcon(this.gripEl.createSpan({ cls: 'hymns-proj-grip-icon' }), 'grip-horizontal');
+    // 顶部「不可见」拖动带：桌面端 Electron 让按住顶部＝拖动整个 Obsidian 窗口。
+    // 不再画一条把手行（渐变 + 六点图标）；视觉上只有下面这条工具条，且它直接置顶。
+    // 移动端不会启用（见 bindDrag），也不再注册任何 JS transform 平移投影层的逻辑。
+    this.gripEl = el.createDiv({ cls: 'hymns-proj-grip', attr: { 'aria-hidden': 'true' } });
     this.bindDrag();
 
-    // 顶部工具条：搜索框 + 上一首 / 下一首 / 播放 / 全屏（桌面端）/ 退出
-    // 换诗歌放右上角、翻节放左右两侧大按钮，方便投屏时站在屏幕边上手点 / 触屏滑动。
-    // 宽度足够时排一行；窄到搜索框放不下时，按钮整排一起换到第二行（见 styles.css）。
+    // 顶部工具条：左上角模式按钮 + 搜索框 + 上一首 / 下一首 / 播放 / 全屏（桌面端）/ 退出。
+    // 整条直接置顶（原来上面还要让出一条把手带）；模式按钮与搜索框同排，
+    // 窄屏时五个操作按钮整排一起换到第二行（见 styles.css）。
+    // 桌面端它同时充当 Electron 的窗口拖动区，交互控件在 CSS 里显式 no-drag。
     this.toolsEl = el.createDiv({ cls: 'hymns-proj-tools' });
+
+    // 左上角当前投影模式 → 点击弹出模式选择：与搜索框同一行，样式对齐 BSAR 左上角按钮。
+    // 菜单挂在投影层内部：整屏投影进入 top layer 后会盖住所有挂在 body 上的浮层。
+    this.modeWrap = this.toolsEl.createDiv({ cls: 'hymns-proj-mode-wrap' });
+    this.modeBtn = this.modeWrap.createEl('button', {
+      cls: 'hymns-proj-mode-btn',
+      attr: { type: 'button', title: '点击切换投影模式' }
+    });
+    this.modeBtn.textContent = this.modeLabel();
+    this.modeBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.wake();                       // 工具条自动淡出时也要让菜单保持可见
+      const existing = el.querySelector('.hymns-proj-mode-menu');
+      if (existing) { existing.remove(); return; }
+      this.showModeMenu(this.modeWrap);
+    });
+    this.syncModeLabel();
 
     // 顶部搜索：输入编号 / 歌名 / 歌词即弹出候选，点一条直接换诗歌。
     // 有内容时，输入框内与候选框顶部都给出一键清空，投影中途不用退出去找歌。
@@ -2711,10 +2848,143 @@ class HymnProjection {
     try { this.wake(); } catch (e) { /* ignore */ }
   }
 
+  /* 左上角模式名：诗歌全屏 / 诗歌窗口。整屏状态变化时由 onFullscreenChange() 同步。 */
+  modeLabel() {
+    return this._fullscreen ? '诗歌全屏' : '诗歌窗口';
+  }
+  syncModeLabel() {
+    if (!this.modeBtn) return;
+    this.modeBtn.textContent = this.modeLabel();
+    try { this.modeBtn.setAttribute('aria-label', '当前：' + this.modeLabel() + '，点击切换投影模式'); } catch (e) { /* ignore */ }
+  }
+
+  /* 左上角模式名 → 投影模式选择菜单。诗歌组（O/P）与经文组（Q/W/E）用分隔线 + 分组标题隔开；
+     BSAR 未安装 / 未开启时经文组置灰、分组下写明原因，点击给出投影内可见的提示。 */
+  showModeMenu(anchorEl) {
+    const el = this.el;
+    const d = this.docEl || document;
+    if (!el || !anchorEl || !d.createElement) return null;
+    const prev = el.querySelector('.hymns-proj-mode-menu');
+    if (prev) prev.remove();
+    const menu = d.createElement('div');
+    menu.className = 'hymns-proj-mode-menu';
+    const ready = isBiblePluginReady(this.app);
+    const addTitle = (text) => {
+      const t = d.createElement('div');
+      t.className = 'hymns-proj-mode-menu-title';
+      t.textContent = text;
+      menu.appendChild(t);
+    };
+    const addItem = (label, key, opts) => {
+      const o = opts || {};
+      const row = d.createElement('div');
+      row.className = 'hymns-proj-mode-menu-item' +
+        (o.disabled ? ' is-disabled' : '') + (o.current ? ' is-current' : '');
+      row.setAttribute('data-key', key);
+      const name = d.createElement('span');
+      name.className = 'hymns-proj-mode-menu-label';
+      name.textContent = label;
+      const kbd = d.createElement('span');
+      kbd.className = 'hymns-proj-mode-menu-key';
+      kbd.textContent = key.toUpperCase();
+      row.appendChild(name);
+      row.appendChild(kbd);
+      row.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        // BSAR 不可用时保持菜单打开，提示直接显示在投影层内（body 上的 Notice 会被盖住）
+        if (o.disabled) { showBibleRequiredNotice(menu); return; }
+        menu.remove();
+        // 点当前模式＝无操作：等价于按同键会把投影直接关掉，那不是用户想要的
+        if (o.current) return;
+        if (key === 'o') { if (!this._fullscreen) this.setFullscreen(true); return; }
+        if (key === 'p') { if (this._fullscreen) this.setFullscreen(false); return; }
+        this.dispatchModeHotkey(key);          // q/w/e → 交给 BSAR 自己的分派
+      });
+      menu.appendChild(row);
+      return row;
+    };
+    addTitle('诗歌投影');
+    // 移动端没有整屏能力，别摆一个点不动的入口（与 BSAR 侧「诗歌全屏」处理一致）
+    if (!isHymnsMobileEnv()) addItem('诗歌全屏', 'o', { current: !!this._fullscreen });
+    addItem('诗歌窗口', 'p', { current: !this._fullscreen });
+    const divider = d.createElement('div');
+    divider.className = 'hymns-proj-mode-menu-divider';
+    menu.appendChild(divider);
+    addTitle('经文投影');
+    // 未安装 / 未开启时，在分组标题下直接写清原因，不必等点击才发现点不动
+    if (!ready) {
+      const hint = d.createElement('div');
+      hint.className = 'hymns-proj-mode-menu-hint';
+      hint.textContent = BIBLE_REQUIRED_HINT;
+      menu.appendChild(hint);
+    }
+    addItem('逐节投影', 'q', { disabled: !ready });
+    addItem('并列投影', 'w', { disabled: !ready });
+    addItem('混合投影', 'e', { disabled: !ready });
+    anchorEl.appendChild(menu);
+    // 点菜单以外的地方收起（延后一拍，避免本次 click 立刻把自己关掉）
+    setTimeout(() => {
+      const onDoc = (ev) => {
+        if (this._closed) {
+          menu.remove();
+          try { d.removeEventListener('click', onDoc, true); } catch (e) { /* ignore */ }
+          return;
+        }
+        if (!menu.parentNode) {
+          try { d.removeEventListener('click', onDoc, true); } catch (e) { /* ignore */ }
+          return;
+        }
+        const t = ev && ev.target;
+        if (t && menu.contains(t)) return;
+        if (t && anchorEl.contains && anchorEl.contains(t)) return;
+        menu.remove();
+        try { d.removeEventListener('click', onDoc, true); } catch (e) { /* ignore */ }
+      };
+      try { d.addEventListener('click', onDoc, true); } catch (e) { /* ignore */ }
+    }, 0);
+    return menu;
+  }
+
+  /* 把「点菜单里的经文项」变成「按一次 Q/W/E」：合成 keydown 派发到 body，
+     让 BSAR 既有的插件级分派接管（它会派发 hymns:projection-close 请本投影收起）。
+     派发到 document 会让两边都在同节点 at-target 执行，stopPropagation 拦不住彼此。 */
+  dispatchModeHotkey(key) {
+    const d = this.docEl || document;
+    try {
+      const ae = d.activeElement;
+      if (ae && typeof ae.blur === 'function' && ae.closest &&
+          ae.closest('input, textarea, select, [contenteditable="true"]')) ae.blur();
+    } catch (e) { /* ignore */ }
+    let ev = null;
+    try {
+      const K = (this.win && this.win.KeyboardEvent) ||
+        (typeof KeyboardEvent === 'function' ? KeyboardEvent : null);
+      if (K) ev = new K('keydown', { key: key, bubbles: true, cancelable: true });
+    } catch (e) { ev = null; }
+    if (!ev) {
+      ev = { type: 'keydown', key: key, bubbles: true, cancelable: true,
+             isComposing: false, keyCode: 0, ctrlKey: false, metaKey: false,
+             altKey: false, shiftKey: false, defaultPrevented: false,
+             preventDefault() {}, stopPropagation() {} };
+    }
+    const target = (d.body && typeof d.body.dispatchEvent === 'function') ? d.body : d;
+    try { target.dispatchEvent(ev); } catch (e) { /* ignore */ }
+  }
+
   handleKey(e) {
     if (this._closed || e.isComposing) return;
     if (e._hymnsHandled) return;                 // 同一按键若已被视图层（O/P/[ ]）处理过，这里不再重复处理
     const k = e.key;
+    // 模式菜单开着时第一次 ESC 只收菜单，第二次才关投影（与 BSAR 侧一致）
+    if (k === 'Escape' && this.el && typeof this.el.querySelector === 'function') {
+      const menu = this.el.querySelector('.hymns-proj-mode-menu');
+      if (menu) {
+        e.preventDefault(); e.stopPropagation();
+        menu.remove();
+        return;
+      }
+    }
     // 焦点在投影搜索框 / 候选框里时，全局快捷键全部让位给输入：
     // 否则打空格就播放、按 P 直接退出投影、按 O 全屏、方向键变成翻页。
     const t = e && e.target;
@@ -2759,6 +3029,19 @@ class HymnProjection {
         return;
       }
     }
+    // Q/W/E 归 BSAR：已装已开时完全让行（由对方插件级监听切回经文投影）；
+    // 未装 / 未开时给一次明确提示，免得用户以为按键失灵。输入框、笔记正文、
+    // 输入法合成态与组合键一律放行，打字时绝不弹提示。
+    const lk = String(k || '').toLowerCase();
+    if ((lk === 'q' || lk === 'w' || lk === 'e') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (isBiblePluginReady(this.app)) return;
+      const ae = this.docEl && this.docEl.activeElement;
+      if (t && t.closest && t.closest('input, textarea, select, [contenteditable="true"]')) return;
+      if (ae && ae.closest && ae.closest('input, textarea, select, [contenteditable="true"]')) return;
+      e.preventDefault(); e.stopPropagation();
+      showBibleRequiredNotice(this.el, false);
+      return;
+    }
     if (k === 'o' || k === 'O') {
       if (!this.isDesktop) return;
       e.preventDefault(); e.stopPropagation();
@@ -2789,37 +3072,31 @@ class HymnProjection {
     }
   }
 
-  /* ---- 窗口模式：顶部把手拖动位置 ---- */
+  /* ---- 顶部拖动：桌面端＝拖整个 Obsidian 窗口，移动端＝完全不能拖 ----
+     桌面端 Electron：顶部工具条与它背后的不可见拖动带声明 -webkit-app-region:drag，
+     按下后由系统移动「整个 Obsidian 窗口」，绝不用 transform 只把投影图层挪开。
+     移动端 / 网页端没有这个能力：旧版会退回 JS transform 把整层图拖走，在手机上
+     既没有意义又会把投影拖出屏幕，因此这里彻底不注册任何 pointer 拖动。 */
   bindDrag() {
     const grip = this.gripEl;
-    let s = null;
-    grip.addEventListener('pointerdown', (e) => {
-      if (e.pointerType === 'mouse' && e.button !== 0) return;
-      s = { id: e.pointerId, x: e.clientX, y: e.clientY, ox: this._pos.x, oy: this._pos.y };
-      try { grip.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
-      this.el.classList.add('is-dragging');
-      this.wake();
-      e.preventDefault();
-    });
-    grip.addEventListener('pointermove', (e) => {
-      if (!s || e.pointerId !== s.id) return;
-      this.setPos(s.ox + (e.clientX - s.x), s.oy + (e.clientY - s.y));
-    });
-    const end = (e) => {
-      if (s && e.pointerId === s.id) { s = null; this.el.classList.remove('is-dragging'); }
-    };
-    grip.addEventListener('pointerup', end);
-    grip.addEventListener('pointercancel', end);
-    grip.addEventListener('dblclick', () => this.setPos(0, 0));   // 双击恢复铺满窗口
+    this._nativeWindowDrag = !!(this.isDesktop && !isHymnsMobileEnv() && supportsAppRegionDrag());
+    if (this.el && this.el.classList) this.el.classList.toggle('is-native-drag', this._nativeWindowDrag);
+    if (!this._nativeWindowDrag) {
+      // 移动端 / 网页端：隐藏拖动带、清掉一切偏移，投影层始终铺满窗口
+      this._pos = { x: 0, y: 0 };
+      try { if (grip && grip.style) grip.style.display = 'none'; } catch (e) { /* ignore */ }
+      if (this.el && this.el.style) this.el.style.transform = '';
+      return;
+    }
+    // 绝不能 preventDefault / setPointerCapture：那会吃掉 Electron 的原生窗口拖动。
+    // 交互元素（搜索框、按钮、菜单）在 CSS 里显式 no-drag。
+    try { grip.setAttribute('title', '按住拖动 Obsidian 窗口，双击复位'); } catch (e) { /* ignore */ }
   }
-  setPos(x, y) {
+  setPos() {
+    // 已不再提供「只挪投影图层」的拖动；这里只保留复位语义（整屏时清掉偏移）。
     if (!this.el) return;
-    const w = this.el.clientWidth || 1, h = this.el.clientHeight || 1;
-    // 至少留 140px 在窗口内，避免整个被拖出去找不回来
-    const mx = Math.max(40, w - 140), my = Math.max(40, h - 140);
-    this._pos.x = Math.max(-mx, Math.min(mx, x));
-    this._pos.y = Math.max(-my, Math.min(my, y));
-    this.el.style.transform = 'translate(' + this._pos.x + 'px,' + this._pos.y + 'px)';
+    this._pos = { x: 0, y: 0 };
+    if (this.el.style) this.el.style.transform = '';
   }
 
   /* ---- 全屏（桌面端）：O 键 / ⛶ 按钮控制。
@@ -2828,11 +3105,23 @@ class HymnProjection {
      ⛶ 按钮：窗口 ↔ 整屏来回切换（保留投影）。
      O 键语义（见 handleKey）：窗口投影 → 整屏；整屏投影 → 直接关闭整个投影。
      P 键语义（见 handleKey）：整屏投影 → 切回窗口投影；窗口投影 → 关闭。 */
+  /* 只认「本投影自己」的整屏元素。document.fullscreenElement 是全局的：
+     经文投影进 / 出整屏时也会触发本插件的 fullscreenchange，若照单全收，
+     会把窗口态的诗歌投影误标成整屏，下一次 ESC 就被当成「原生退出整屏」而放空。 */
+  ownFullscreenElement() {
+    const fse = this.docEl && this.docEl.fullscreenElement;
+    if (!fse || !this.el) return null;
+    if (fse === this.el) return fse;
+    return (typeof this.el.contains === 'function' && this.el.contains(fse)) ? fse : null;
+  }
   setFullscreen(on) {
     const el = this.el;
     if (!el || this._closed) return;
     if (on) {
       if (this._fullscreen) return;
+      // 来回切模式时，上一次「主动退出整屏」的标记可能还没被 fullscreenchange 消费；
+      // 留到这次进入整屏，用户按 ESC 就会被误判成主动切换而不关投影 → ESC 偶发失灵。
+      this._exitFsByToggle = false;
       if (typeof el.requestFullscreen !== 'function') { new Notice('当前环境不支持整屏投影'); return; }
       try {
         const p = el.requestFullscreen({ navigationUI: 'hide' });
@@ -2840,13 +3129,15 @@ class HymnProjection {
       } catch (e) { /* ignore */ }
     } else {
       if (!this._fullscreen) return;
+      if (!this.ownFullscreenElement()) { this._fullscreen = false; return; }
       this._exitFsByToggle = true;            // 主动退出整屏 → 保留窗口投影
-      try { if (this.docEl.fullscreenElement) this.docEl.exitFullscreen(); } catch (e) { /* ignore */ }
+      try { this.docEl.exitFullscreen(); } catch (e) { this._exitFsByToggle = false; /* ignore */ }
     }
   }
   onFullscreenChange() {
     if (this._closed || !this.el) return;
-    const on = !!this.docEl.fullscreenElement;
+    const on = !!this.ownFullscreenElement();
+    if (on) this._exitFsByToggle = false;     // 已进入整屏：清掉可能残留的旧标记
     if (on === this._fullscreen) return;
     this._fullscreen = on;
     // 非 ⛶ 主动切换而退出整屏（ESC / 浏览器原生退出）→ 直接关掉整个投影
@@ -2863,6 +3154,7 @@ class HymnProjection {
       this.fsBtn.setAttribute('aria-label', on ? '退出全屏（O）' : '全屏投影（O）');
       this.fsBtn.setAttribute('title', on ? '退出全屏（O）' : '全屏投影（O）');
     }
+    this.syncModeLabel();                     // 左上角模式名跟着「诗歌全屏 / 诗歌窗口」变
     this.renderPage(this.pageNo);
     this.wake();
   }
@@ -2944,9 +3236,15 @@ class HymnProjection {
     const d = this.docEl;
     // 先退出整屏并立即把投影层从 DOM 摘掉——瞬间消失、打断整屏过渡动画，
     // 避免「先缩回窗口 + 冻结（PDF 释放耗时）再消失」的卡顿。资源释放放后面，不挡画面。
-    if (this._fullscreen || d.fullscreenElement === this.el) {
-      try { if (d.fullscreenElement) d.exitFullscreen(); } catch (e) { /* ignore */ }
-      this._fullscreen = false;
+    // 只退出「本投影自己」的整屏；别的插件（经文投影）占着整屏时不许顺手把它关掉
+    if (this.ownFullscreenElement()) {
+      try { d.exitFullscreen(); } catch (e) { /* ignore */ }
+    }
+    this._fullscreen = false;
+    this._exitFsByToggle = false;
+    if (this.modeWrap && typeof this.modeWrap.querySelector === 'function') {
+      const menu = this.modeWrap.querySelector('.hymns-proj-mode-menu');
+      if (menu) menu.remove();
     }
     if (this.el && this.el.parentNode) this.el.remove();
     this.el = null;
@@ -3681,47 +3979,51 @@ class HymnsView extends ItemView {
   }
 
   async onClose() {
-    this.closeDropdown();
-    this._audioToken = (this._audioToken || 0) + 1;        // 作废在途的音频读取
-    if (this._audioUrl) { URL.revokeObjectURL(this._audioUrl); this._audioUrl = null; }
-    if (this.audioEl) { this.audioEl.pause(); this.audioEl.removeAttribute('src'); }
-    // 关闭视图前必须释放 PDF 资源（画布 + 文档），否则显存/内存会残留
-    this.disposePdfDoc();
-    this.disposePdfCanvases();
-    const pr = this.plugin._projection;
-    if (pr && pr.view === this) { try { pr.close(); } catch (e) { /* ignore */ } this.plugin._projection = null; }
-    if (this._ro) { try { this._ro.disconnect(); } catch (e) { /* ignore */ } this._ro = null; }
-    if (this._onWinResize) {
+    // ⚠️ async onClose 抛错会变成 rejected Promise，leaf.detach() 内部 await 它，
+    //    进而让 Obsidian 的 disablePlugin 失败并弹「无法禁用插件」。这里必须整体兜住。
+    try {
+      this.closeDropdown();
+      this._audioToken = (this._audioToken || 0) + 1;        // 作废在途的音频读取
+      if (this._audioUrl) { URL.revokeObjectURL(this._audioUrl); this._audioUrl = null; }
+      if (this.audioEl) { this.audioEl.pause(); this.audioEl.removeAttribute('src'); }
+      // 关闭视图前必须释放 PDF 资源（画布 + 文档），否则显存/内存会残留
+      this.disposePdfDoc();
+      this.disposePdfCanvases();
+      const pr = this.plugin._projection;
+      if (pr && pr.view === this) { try { pr.close(); } catch (e) { /* ignore */ } this.plugin._projection = null; }
+      if (this._ro) { try { this._ro.disconnect(); } catch (e) { /* ignore */ } this._ro = null; }
+      if (this._onWinResize) {
+        try {
+          window.removeEventListener('resize', this._onWinResize);
+          window.removeEventListener('orientationchange', this._onWinResize);
+        } catch (e) { /* ignore */ }
+        this._onWinResize = null;
+      }
+      clearTimeout(this._relayoutTimer);
+      clearTimeout(this._resizeScrollTimer);
+      // 关掉的是“当前视图”时，把指向让给还开着的那个面板，避免操作落到一个已销毁的视图上
+      if (this.plugin && this.plugin.view === this) {
+        const other = this.app.workspace.getLeavesOfType(VIEW_TYPE_HYMNS)
+          .map((l) => l.view).find((v) => v && v !== this);
+        this.plugin.view = other || null;
+      }
+      // 解绑持久事件，避免视图销毁后监听器泄漏（与 buildLayout 里的 _wirePersistentEvents 对应）
       try {
-        window.removeEventListener('resize', this._onWinResize);
-        window.removeEventListener('orientationchange', this._onWinResize);
+        if (this._onPointerDown) this.containerEl.removeEventListener('pointerdown', this._onPointerDown, true);
       } catch (e) { /* ignore */ }
-      this._onWinResize = null;
-    }
-    clearTimeout(this._relayoutTimer);
-    clearTimeout(this._resizeScrollTimer);
-    // 关掉的是“当前视图”时，把指向让给还开着的那个面板，避免操作落到一个已销毁的视图上
-    if (this.plugin && this.plugin.view === this) {
-      const other = this.app.workspace.getLeavesOfType(VIEW_TYPE_HYMNS)
-        .map((l) => l.view).find((v) => v && v !== this);
-      this.plugin.view = other || null;
-    }
-    // 解绑持久事件，避免视图销毁后监听器泄漏（与 buildLayout 里的 _wirePersistentEvents 对应）
-    try {
-      if (this._onPointerDown) this.containerEl.removeEventListener('pointerdown', this._onPointerDown, true);
-    } catch (e) { /* ignore */ }
-    try {
-      const doc = this.containerEl && this.containerEl.ownerDocument;
-      if (doc && this._onProjKey) doc.removeEventListener('keydown', this._onProjKey, true);
-      if (doc && this._onFullKey) doc.removeEventListener('keydown', this._onFullKey, true);
-      if (doc && this._onWhiteboardKey) doc.removeEventListener('keydown', this._onWhiteboardKey, true);
-      if (doc && this._onNewTabKey) doc.removeEventListener('keydown', this._onNewTabKey, true);
-      if (doc && this._onPdfNewTabKey) doc.removeEventListener('keydown', this._onPdfNewTabKey, true);
-    } catch (e) { /* ignore */ }
-    // 不再 this.contentEl.empty()：侧边栏“收起”在 Obsidian 里只是把面板隐藏（display:none），
-    // 视图其实还在、下次划出不用重建——清空反而会让桌面端收起再划出时丢失 PDF 滚动位置，
-    // 并造成划出时白屏闪烁。真正销毁视图时 Obsidian 会自己把节点从文档移除，无需手动清。
-    // PDF 画布与文档已在上面显式释放（disposePdf*），显存/内存不会残留。
+      try {
+        const doc = this.containerEl && this.containerEl.ownerDocument;
+        if (doc && this._onProjKey) doc.removeEventListener('keydown', this._onProjKey, true);
+        if (doc && this._onFullKey) doc.removeEventListener('keydown', this._onFullKey, true);
+        if (doc && this._onWhiteboardKey) doc.removeEventListener('keydown', this._onWhiteboardKey, true);
+        if (doc && this._onNewTabKey) doc.removeEventListener('keydown', this._onNewTabKey, true);
+        if (doc && this._onPdfNewTabKey) doc.removeEventListener('keydown', this._onPdfNewTabKey, true);
+      } catch (e) { /* ignore */ }
+      // 不再 this.contentEl.empty()：侧边栏“收起”在 Obsidian 里只是把面板隐藏（display:none），
+      // 视图其实还在、下次划出不用重建——清空反而会让桌面端收起再划出时丢失 PDF 滚动位置，
+      // 并造成划出时白屏闪烁。真正销毁视图时 Obsidian 会自己把节点从文档移除，无需手动清。
+      // PDF 画布与文档已在上面显式释放（disposePdf*），显存/内存不会残留。
+    } catch (e) { /* ignore: 卸载期间的异常不能让 detach() 的 Promise reject */ }
   }
 
   /* ---- 播放栏 ---- */
@@ -5245,6 +5547,12 @@ class HymnsView extends ItemView {
 /* ============ 插件主类 ============ */
 class HymnsPlugin extends Plugin {
   async onload() {
+    // ⚠️ 必须排在所有 register* / registerView 之前，详见 installUnloadGuard()。
+    // 与 Bible search and reader 共用同一套加固：禁用插件时 Obsidian 的
+    // Component.unload() 逆序执行 register 回调且没有异常保护，任一回调抛错就会
+    // 留下「样式撤了、视图类型没注销、onunload 没跑」的半死状态，重新启用直接报错。
+    this.installUnloadGuard();
+    this.reclaimStaleViewTypes();
     const data = await this.loadData() || {};
     this.settings = Object.assign({
       // 留空 = 扫描整个仓库（零配置即可用；识别靠文件名编号，路径只用于缩小范围）
@@ -5253,6 +5561,8 @@ class HymnsPlugin extends Plugin {
       whiteboardFolder: '',  // 白板诗歌合订本目录（可选），留空 = 全仓库按 b/c/d/e/q/x.pdf 文件名识别
       autoPlayMP3: false,
       playMode: 'sequential',
+      // 安装 / 启用插件后自动在右侧边栏生成诗歌面板（已有面板时不重复建）
+      autoOpenSidebar: true,
       pdfFollow: false,     // PDF 联动：选中后侧边栏 PDF 随播放变动，默认关闭
       autoCheckUpdate: true, // 每次启动 Obsidian 都自动检测一次更新
       lastVersion: '',       // 上次已记录的版本号，用于判断「是否升级」并弹更新说明
@@ -5329,6 +5639,9 @@ class HymnsPlugin extends Plugin {
     this.registerEvent(this.app.workspace.on('layout-change', () => this.ensureViewsNotBlank()));
 
     this.app.workspace.onLayoutReady(async () => {
+      // 先生成侧边栏面板：buildIndex() 扫全库可能要几秒，不能让面板等到索引跑完才出现。
+      // 此时列表暂时是空的，下面 refreshAllViews() 会把数据补上（和布局里恢复的旧面板同一套逻辑）。
+      try { await this.ensureSidebarView(); } catch (e) { /* 布局未就绪时静默跳过 */ }
       await this.buildIndex();
       await this.loadLyrics();
       this.applyLyricsTitles();   // E/X 等文件名无歌名的，用歌词索引里的标题补齐
@@ -5345,6 +5658,7 @@ class HymnsPlugin extends Plugin {
         this.showNoMediaNotice();
       }
       // 索引与歌词都就绪后，把侧边栏和标签页一并刷新，两边都能立刻用
+      // （刚自动生成的面板也在这里补上诗歌列表）
       this.refreshAllViews();
       // 插件已成功加载 → 上一轮更新留下的 .old 回滚备份已完成使命，清理掉，避免目录里堆一堆备份文件
       this.cleanOldBackups();
@@ -5353,7 +5667,61 @@ class HymnsPlugin extends Plugin {
     });
   }
 
+  /* 卸载链保险丝。Obsidian Component.unload() 是
+         for (; _events.length > 0;) _events.pop()(); this.onunload();
+     没有 try/catch，且逆序执行：loadCSS 的样式清理最先跑（样式先消失），
+     registerView 的「注销视图类型」排在后面。中间任一 register 回调抛错或返回
+     rejected Promise，整条链就断 → 视图类型残留在 viewRegistry、onunload 不执行、
+     插件实例没被删除，重新启用时 registerView 抛
+     "Attempting to register an existing view type"，只能重启 Obsidian。
+     常见抛错源是 registerView 自带清理里的 workspace.detachLeavesOfType()：
+     它遍历 leaf.view.getViewType()，遇到折叠侧边栏的延迟视图 (view 为空) 会同步抛错。
+     在实例层把 register() 包一层，每个清理回调独立吞异常，保证链条跑完；
+     Obsidian 基类内部调用的也是 this.register，所以 registerView / registerEvent /
+     addCommand / loadCSS 的清理一并受保护。 */
+  installUnloadGuard() {
+    if (this._unloadGuardInstalled) return;
+    const baseRegister = this.register;
+    if (typeof baseRegister !== 'function') return;
+    this._unloadGuardInstalled = true;
+    const self = this;
+    this.register = function (cb) {
+      if (typeof cb !== 'function') return baseRegister.call(self, cb);
+      return baseRegister.call(self, function () {
+        self._unloaded = true;   // 卸载一开始就让启动期异步回调停手
+        try {
+          const r = cb();
+          if (r && typeof r.catch === 'function') r.catch(() => { /* ignore */ });
+          return r;
+        } catch (e) { /* 单个清理回调失败不能中断整条卸载链 */ }
+      });
+    };
+  }
+
+  /* 上次禁用若断在注销视图类型之前，重新启用前先回收本插件专属类型，
+     让坏状态会话不用重启 Obsidian 也能重新开启。 */
+  reclaimStaleViewTypes() {
+    try {
+      const vr = this.app && this.app.viewRegistry;
+      if (!vr || !vr.viewByType) return;
+      if (!Object.prototype.hasOwnProperty.call(vr.viewByType, VIEW_TYPE_HYMNS)) return;
+      try {
+        if (typeof vr.unregisterView === 'function') vr.unregisterView(VIEW_TYPE_HYMNS);
+        else delete vr.viewByType[VIEW_TYPE_HYMNS];
+      } catch (e) {
+        try { delete vr.viewByType[VIEW_TYPE_HYMNS]; } catch (e2) { /* ignore */ }
+      }
+    } catch (e) { /* ignore */ }
+  }
+
   onunload() {
+    this._unloaded = true;
+    // 第三重保险：主动注销视图类型，即便 Obsidian 的 registerView 清理回调被跳过也不会残留。
+    // unregisterView 内部先判 hasOwnProperty 再 delete，重复调用幂等。
+    try {
+      const vr = this.app && this.app.viewRegistry;
+      if (vr && typeof vr.unregisterView === 'function') vr.unregisterView(VIEW_TYPE_HYMNS);
+    } catch (e) { /* ignore */ }
     if (this._onProjCloseRequest && typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
       try { document.removeEventListener('hymns:projection-close', this._onProjCloseRequest); } catch (e) { /* ignore */ }
       this._onProjCloseRequest = null;
@@ -5362,8 +5730,82 @@ class HymnsPlugin extends Plugin {
       try { document.removeEventListener('keydown', this._onGlobalProjKey, true); } catch (e) { /* ignore */ }
       this._onGlobalProjKey = null;
     }
-    if (this.view && this.view._audioUrl) URL.revokeObjectURL(this.view._audioUrl);
+    try { if (this.view && this.view._audioUrl) URL.revokeObjectURL(this.view._audioUrl); } catch (e) { /* ignore */ }
     if (this._projection) { try { this._projection.close(); } catch (e) { /* ignore */ } }
+    this._projection = null;
+    /* 设置里关掉插件时 Obsidian 会在 unload() 之后自己 dispose 视图。
+       ⚠️ 不要在同步卸载窗口里清空视图 DOM / 重复 detach leaf：那会和它的卸载流程抢跑，
+       让 disablePlugin() 抛错「无法禁用插件」，结果样式撤了、面板还留在侧边栏。
+       detach 返回的 Promise 也必须吞掉 rejection，同样会干扰禁用流程。
+       重新启用时 ensureSidebarView() 会再生成一个正常面板，两边正好配套。 */
+    try {
+      const ws = this.app && this.app.workspace;
+      const swallow = (r) => {
+        try { if (r && typeof r.catch === 'function') r.catch(() => { /* detach 失败不干扰禁用 */ }); } catch (e) { /* ignore */ }
+      };
+      const mainLeaves = new Set();
+      const allLeaves = new Set();
+      const docs = new Set();
+      if (typeof document !== 'undefined' && document) docs.add(document);
+      try {
+        (ws.getLeavesOfType(VIEW_TYPE_HYMNS) || []).forEach((l) => { mainLeaves.add(l); allLeaves.add(l); });
+      } catch (e) { /* ignore */ }
+      try {
+        if (ws.iterateAllLeaves) ws.iterateAllLeaves((l) => {
+          try {
+            const st = l && typeof l.getViewState === 'function' ? l.getViewState() : null;
+            if (st && st.type === VIEW_TYPE_HYMNS) allLeaves.add(l);
+          } catch (e) { /* ignore */ }
+        });
+      } catch (e) { /* ignore */ }
+      for (const l of allLeaves) {
+        try { const d = l && l.view && l.view.containerEl && l.view.containerEl.ownerDocument; if (d) docs.add(d); } catch (e) { /* ignore */ }
+      }
+      try {
+        if (typeof ws.detachLeavesOfType === 'function') {
+          swallow(ws.detachLeavesOfType(VIEW_TYPE_HYMNS));
+          // 官方 API 覆盖主工作区；只补弹出窗口 / 折叠侧边栏里额外发现的 leaf，不重复动主工作区那批
+          for (const l of allLeaves) {
+            if (mainLeaves.has(l)) continue;
+            try { if (l && typeof l.detach === 'function') swallow(l.detach()); } catch (e) { /* ignore */ }
+          }
+        } else {
+          for (const l of allLeaves) {
+            try { if (l && typeof l.detach === 'function') swallow(l.detach()); } catch (e) { /* ignore */ }
+          }
+        }
+      } catch (e) { /* ignore */ }
+      // 挂在 body 上的投影层 / 下拉不属于 Obsidian 视图，可以同步移除
+      for (const d of docs) {
+        try {
+          d.querySelectorAll('.hymns-proj, .hymns-dropdown, .hymns-proj-inline-notice')
+            .forEach((el) => { try { el.remove(); } catch (e) { /* ignore */ } });
+        } catch (e) { /* ignore */ }
+      }
+      // 视图内部 DOM 的兜底延后：等 Obsidian dispose 完再做，且只有「没有新实例接管」才清
+      const cleanupViewDom = () => {
+        try {
+          const pm = this.app && this.app.plugins;
+          const id = this.manifest && this.manifest.id;
+          if (pm && pm.plugins && id && pm.plugins[id] && pm.plugins[id] !== this) return;
+          for (const d of docs) {
+            try {
+              d.querySelectorAll('.hymns-view').forEach((el) => {
+                try { el.classList.remove('hymns-view'); } catch (e) { /* ignore */ }
+                try {
+                  if (typeof el.empty === 'function') el.empty();
+                  else while (el.firstChild) el.removeChild(el.firstChild);
+                } catch (e) { /* ignore */ }
+              });
+            } catch (e) { /* ignore */ }
+          }
+        } catch (e) { /* ignore */ }
+      };
+      try {
+        if (typeof setTimeout === 'function') setTimeout(cleanupViewDom, 0);
+        else cleanupViewDom();
+      } catch (e) { /* ignore */ }
+    } catch (e) { /* ignore */ }
   }
 
   /* 是否已有「挂好快捷键监听」的 Hymns 视图。
@@ -5395,6 +5837,24 @@ class HymnsPlugin extends Plugin {
     if (!e || e.defaultPrevented || e.isComposing || e._hymnsHandled) return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     const k = e.key;
+    const lk = String(k || '').toLowerCase();
+    // Q/W/E 归 BSAR：插件已装已开时整个让行（视图级也不处理这三个键）。
+    // 没装 / 没开时给一次提示；投影在前台时交给投影自己的 handleKey 用投影内提示，
+    // 输入框 / 笔记正文 / 输入法合成态一律放行，打字绝不弹提示。
+    if (lk === 'q' || lk === 'w' || lk === 'e') {
+      if (isBiblePluginReady(this.app)) return;
+      const t = e.target;
+      const ae = (typeof document !== 'undefined') ? document.activeElement : null;
+      if (t && t.closest && t.closest('input, textarea, select, [contenteditable="true"]')) return;
+      if (ae && ae.closest && ae.closest('input, textarea, select, [contenteditable="true"]')) return;
+      const proj = this._projection;
+      if (proj && !proj._closed && proj.el && t &&
+          typeof proj.el.contains === 'function' && proj.el.contains(t)) return;
+      e._hymnsHandled = true;                 // 别让同一次按键再被投影层弹一次提示
+      e.preventDefault(); e.stopPropagation();
+      showBibleRequiredNotice(null, true);
+      return;
+    }
     const isP = (k === 'p' || k === 'P');
     const isO = (k === 'o' || k === 'O');
     const isTab = (k === '[');
@@ -6832,6 +7292,54 @@ class HymnsPlugin extends Plugin {
     }
     try { this.addRecent(h); } catch (e) { /* 记录最近打开失败不影响主流程 */ }
   }
+  /* 安装 / 启用插件后自动在右侧边栏生成诗歌面板。
+     只在「一个 Hymns 面板都没有」时执行：用户上次摆好的侧边栏 / 标签页布局原样保留，
+     不会每次启动都多开一个。面板被用户关掉后，下次启动会再生成（可在设置里关掉）。
+     不顶掉其它插件正在用的侧边栏标签：那个 leaf 显示着别的视图时另开一个。 */
+  async ensureSidebarView() {
+    if (this._unloaded) return;
+    if (!this.settings || this.settings.autoOpenSidebar === false) return;
+    const ws = this.app && this.app.workspace;
+    if (!ws || typeof ws.getLeavesOfType !== 'function') return;
+    let existing = [];
+    try { existing = ws.getLeavesOfType(VIEW_TYPE_HYMNS) || []; } catch (e) { return; }
+    if (existing.length) return;
+    // 侧边栏折叠时 Obsidian 会留下「延迟视图」：view 还没实例化，getLeavesOfType 查不到，
+    // 但布局里确实有这个面板。不判这一层就会在展开时多开一个重复面板。
+    try {
+      if (typeof ws.iterateAllLeaves === 'function') {
+        let deferred = false;
+        ws.iterateAllLeaves((l) => {
+          try {
+            const st = l && typeof l.getViewState === 'function' ? l.getViewState() : null;
+            if (st && st.type === VIEW_TYPE_HYMNS) deferred = true;
+          } catch (e) { /* ignore */ }
+        });
+        if (deferred) return;
+      }
+    } catch (e) { /* ignore */ }
+    let leaf = null;
+    try { leaf = typeof ws.getRightLeaf === 'function' ? ws.getRightLeaf(false) : null; } catch (e) { leaf = null; }
+    try {
+      // getRightLeaf(false) 会复用右侧栏现有标签；若那里是别的插件的视图，不能把它顶掉
+      if (leaf) {
+        let occupied = false;
+        try {
+          const st = typeof leaf.getViewState === 'function' ? leaf.getViewState() : null;
+          const t = st && st.type;
+          occupied = !!t && t !== 'empty' && t !== VIEW_TYPE_HYMNS;
+        } catch (e) { occupied = false; }
+        if (occupied && typeof ws.getRightLeaf === 'function') leaf = ws.getRightLeaf(true);
+      }
+    } catch (e) { /* 取不到新 leaf 就沿用原来的 */ }
+    if (!leaf) return;
+    try {
+      await leaf.setViewState({ type: VIEW_TYPE_HYMNS, active: false });
+      // 移动端侧边栏是抽屉：开机就 reveal 会把抽屉弹出来盖住笔记，只生成面板不弹出。
+      if (!isHymnsMobileEnv() && typeof ws.revealLeaf === 'function') ws.revealLeaf(leaf);
+    } catch (e) { /* 布局尚未就绪 / API 不支持时静默跳过 */ }
+  }
+
   async activateView() {
     const { workspace } = this.app;
     let leaf = workspace.getLeavesOfType(VIEW_TYPE_HYMNS)[0];
