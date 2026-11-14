@@ -97,6 +97,17 @@ const PLAY_MODE_NAME = { sequential: '顺序播放', loop: '顺序循环', one: 
 const PLAY_MODE_ICON = { sequential: 'list-ordered', loop: 'repeat', one: 'repeat-1', shuffle: 'shuffle' };
 const CUR_PLAYLIST = '__current__';
 
+/* 「最近打开」也是诗歌投影的历史记录：默认保留 50 首，设置里允许 1–200。
+   超出范围一律夹到边界，避免有人填 0 / 负数 / 超大值把侧边栏拖慢。 */
+const RECENT_LIMIT_DEFAULT = 50;
+const RECENT_LIMIT_MIN = 1;
+const RECENT_LIMIT_MAX = 200;
+function clampRecentLimit(v) {
+  const n = Math.floor(Number(v));
+  if (!Number.isFinite(n)) return RECENT_LIMIT_DEFAULT;
+  return Math.min(RECENT_LIMIT_MAX, Math.max(RECENT_LIMIT_MIN, n));
+}
+
 /* ===== 内置默认播放列表（首次加载自动写入，标记 builtin 便于识别与去重）=====
    歌单名 / 歌曲编号均由用户提供，直接按编号（code）存储；
    code 等于该编号基础版的 uid，播放时由 resolveHymn 实时解析，
@@ -120,6 +131,21 @@ const UPDATE_BASE = 'https://raw.githubusercontent.com/' + UPDATE_REPO + '/' + U
 
 // ==================== 更新日志内容（供弹窗离线展示；缺失时回退到远端 CHANGELOG.md）====================
 const CHANGELOG_CONTENT = {
+  '2.6.0': `## [2.6.0] - 2026-11-14
+
+### 本次更新
+- **投影里能翻「最近打开」和播放列表了**：工具条在播放 ▶ 与 ⛶ 之间多了两个按钮，两级查看——先选列表，再点诗歌；面板支持鼠标滚轮、↑ ↓ / PageUp / PageDown / Home / End，按 Enter 直接投这一首并把焦点还给投影，Esc 先收面板。
+- **「上一首 / 下一首」按你看到的顺序走**：与「最近打开」面板同序，空白首页按上一首就是最近打开的第一首，再按依次往下；下一首回到上方，走到两端给提示、不循环。投影里打开过的诗歌会记进插件数据，重启 Obsidian 后仍在，默认保留 50 首（设置里可改 1–200）。
+- **P 恒窗口、O 恒全屏**：无论当前是经文投影还是诗歌投影、无论是否已经整屏，按下去都得到确定的模式；Q / W / E 切到经文投影时保留当前的全屏 / 窗口状态。
+
+### 修复
+- **连续切换投影不再「第二次变窗口」**：修掉整屏图层交接时与浏览器全屏异步队列抢时序的问题，诗歌全屏 ↔ 经文全屏来回切多次都稳定；从整屏经文投影按 P 过来也会真正退出旧层的整屏。
+- 历史面板按 Enter 选歌后焦点残留、按钮置灰与边界提示一并修好；移动端安全区、卸载清理继续加固。
+
+### 小提示
+- 与经文投影互切建议搭配「Bible Search and Reader」5.2.0 或更新版，两个插件一起更新最省心。
+- 投影里 ↑ ↓ 翻节、← → 按「最近打开」翻上一首 / 下一首、空格播放、Esc 退出保持不变。`,
+
   '2.5.0': `## [2.5.0] - 2026-11-13
 
 ### 本次更新
@@ -992,6 +1018,34 @@ class HymnsSettingTab extends PluginSettingTab {
           this.plugin.settings.autoOpenSidebar = v;
           await this.plugin.saveAll();
         }));
+    // 「最近打开」同时就是诗歌投影的历史记录：数量上限在这里改（默认 50，1–200）。
+    // onChange 即时落盘但不回写输入框（否则想输 150 刚打「1」就被改成 1），
+    // 失焦时再把值规范化并显示，避免打断输入。
+    new Setting(containerEl)
+      .setName('最近打开记录数')
+      .setDesc('「最近打开」与诗歌投影的历史记录是同一份，默认 50 首，可设 1–200。调小会立即裁剪已有记录；重启后仍然保留。')
+      .addText((t) => {
+        t.setPlaceholder(String(RECENT_LIMIT_DEFAULT))
+          .setValue(String(clampRecentLimit(this.plugin.settings.recentLimit)));
+        try {
+          t.inputEl.setAttribute('type', 'number');
+          t.inputEl.setAttribute('min', String(RECENT_LIMIT_MIN));
+          t.inputEl.setAttribute('max', String(RECENT_LIMIT_MAX));
+        } catch (e) { /* ignore */ }
+        const apply = async (raw, normalize) => {
+          const n = clampRecentLimit(raw);
+          this.plugin.settings.recentLimit = n;
+          this.plugin.recent = (this.plugin.recent || []).slice(0, n);
+          try { this.plugin.syncProjectionHistory(); } catch (e) { /* ignore */ }
+          await this.plugin.saveAll();
+          if (normalize) {
+            t.setValue(String(n));
+            try { this.plugin.refreshAllViews(); } catch (e) { /* ignore */ }
+          }
+        };
+        t.onChange((v) => { if (v !== '') void apply(v, false); });
+        t.inputEl.addEventListener('blur', () => void apply(t.getValue(), true));
+      });
     new Setting(containerEl)
       .setName('重建诗歌索引')
       .setDesc('修改文件夹或增删诗歌后，重新扫描 PDF/MP3（不含歌词正文）。')
@@ -1976,7 +2030,7 @@ class LyricsModal extends Modal {
   onClose() { this.contentEl.empty(); }
 }
 
-/* ============ 窗口投影（单页投影：窗口内可拖动 / 整屏全屏） ============
+/* ============ 诗歌投影（单页投影：D 切换整屏） ============
    会众唱诗时把诗歌页投到大屏：一个屏幕只放一页 PDF（一页 = 一节）。
    · 上一节 / 下一节：↑ ↓ / PageUp / PageDown、屏幕左右两侧的大按钮（↑ / ↓ 箭头）、鼠标滚轮、下滑 / 上滑
    · 投影历史：← →、右上角两个按钮、右滑 / 左滑 —— 只在本次会话投影过的诗歌间后退 / 前进，
@@ -1987,7 +2041,7 @@ class LyricsModal extends Modal {
    · 播放：右上角 ▶ 或空格键 —— 打开底部播放条并播放这首诗歌的 MP3；
            播放条会占用页面下方空间（而不是盖在页面上），绝不挡住 PDF 的字
    · 全屏：默认只占满 Obsidian 窗口（顶部把手可按住拖动位置 / 双击复位）；
-           桌面端按 O 或点 ⛶ 扩大到整块屏幕，再按 O / Esc 退出整屏
+           桌面端按 O 或点 ⛶ 扩大到整块屏幕，再按 O 退出整屏（Esc / P 关闭投影）
    · 退出：Esc（非全屏时直接退出投影）或右上角 ✕
    适配规则：页面按「等比缩放取小」铺进可用区域——区域偏宽就适应高度（左右留黑边），
    区域偏高就适应宽度（上下留黑边），任何窗口比例下都不会裁切、不会超出界面。 */
@@ -2006,12 +2060,94 @@ function snapshotHymnProjection(p) {
    · 没安装 / 没开启时，按 Q/W/E 或点模式菜单里的经文项要给明确提示，
      否则用户会以为按键失灵。提示优先渲染进诗歌投影层内部：整屏投影进入
      top layer 后，挂在 body 上的系统 Notice 会被整块盖住。
-   · 反过来，经文投影菜单里的 O/P 也由对方派发合成按键，交给本插件自己的监听。 */
+   · 反过来，经文投影菜单里的 P 也由对方派发合成按键，交给本插件自己的监听。 */
 const BIBLE_PROJECTION_SELECTOR = '.bible-projection-fullscreen, .bible-proj-fullscreen';
 const BIBLE_REQUIRED_NOTICE = '请先安装并开启 Bible search and reader 插件，才能使用经文投影';
 const BIBLE_REQUIRED_HINT = '需安装并开启 Bible search and reader 插件';
 
-/* 移动端没有「诗歌全屏」：菜单里不摆一个点不动的入口。
+/* ===== 切换投影模式时的「整屏交接」=====
+   整屏状态是独立于投影模式的显示状态：从诗歌投影切到经文投影、或反过来，
+   都必须「原来是整屏 → 切完还是整屏，原来非整屏 → 切完仍非整屏」。
+   浏览器把整屏绑在具体 DOM 元素上，旧投影层一被移除整屏就丢了，因此用一个
+   一次性的 window 标记把状态交给接管方。两个插件各自实现同名的读写函数，
+   靠同一个 key 协同、互不 import；3 秒过期，只服务于同一次按键 / 点击，
+   绝不会影响之后用户自己切换全屏的取舍。 */
+const PROJECTION_FS_HANDOFF_KEY = '__obsidian_projection_fs_handoff';
+function markProjectionFullscreenHandoff(on) {
+  try {
+    if (typeof window === 'undefined') return;
+    window[PROJECTION_FS_HANDOFF_KEY] = { on: !!on, at: Date.now() };
+  } catch (e) { /* ignore */ }
+}
+function takeProjectionFullscreenHandoff() {
+  try {
+    if (typeof window === 'undefined') return false;
+    const v = window[PROJECTION_FS_HANDOFF_KEY];
+    if (!v) return false;
+    window[PROJECTION_FS_HANDOFF_KEY] = null;   // 一次性：谁先接管谁消费
+    if (Date.now() - (v.at || 0) > 3000) return false;
+    return !!v.on;
+  } catch (e) { return false; }
+}
+
+/* ===== 「投影应处于整屏」的持久意图（与 BSAR 同 key、互不 import） =====
+   ⚠️ P / O 是「显式指定显示模式」：P 一律窗口、O 一律全屏，无论之前是全屏还是窗口、
+   无论对方（经文）投影是否占着整屏，都不得继承旧状态。启动前先清掉残留意图，
+   真正进整屏后由 setFullscreen() 在 requestFullscreen 成功时才写 true（失败不写）。
+   Q/W/E 只切投影模式：以诗歌投影「此刻真实的整屏状态」为准交接给经文投影。
+   D / ⛶ 是用户主动翻转显示状态，也写这个意图。 */
+const PROJECTION_FS_INTENT_KEY = '__obsidian_projection_fs_intent';
+function setProjectionFsIntent(on) {
+  try {
+    if (typeof window !== 'undefined') window[PROJECTION_FS_INTENT_KEY] = !!on;
+  } catch (e) { /* ignore */ }
+}
+function getProjectionFsIntent() {
+  try {
+    return !!(typeof window !== 'undefined' && window[PROJECTION_FS_INTENT_KEY]);
+  } catch (e) { return false; }
+}
+/* 经文投影层是不是正占着整屏：从经文投影按 P 切到诗歌投影时据此保持整屏。 */
+function bibleProjectionWantsFullscreen() {
+  try {
+    const d = (typeof document !== 'undefined') ? document : null;
+    if (!d) return false;
+    const fs = d.fullscreenElement || d.webkitFullscreenElement;
+    if (!fs) return false;
+    const hosts = (typeof d.querySelectorAll === 'function')
+      ? d.querySelectorAll(BIBLE_PROJECTION_SELECTOR) : [];
+    for (let i = 0; i < hosts.length; i++) {
+      const h = hosts[i];
+      // 整屏交接期间旧经文层会短暂隐藏在 DOM 里等 fullscreenchange，它已不是前台、
+      // 也不代表「应该继承的整屏状态」
+      if (h.style && h.style.visibility === 'hidden') continue;
+      if (h === fs || (h.contains && typeof h.contains === 'function' && h.contains(fs))) return true;
+    }
+  } catch (e) { /* ignore */ }
+  return false;
+}
+
+/* 「窗口投影」必须真的是窗口：无论旧的经文投影层什么时候被移除，都要把浏览器整屏退干净。
+   按 P 时本插件（捕获阶段）先开层，对方经文层要等冒泡阶段才被关掉；移除
+   fullscreenElement 的时机可能落在第一次 exitFullscreen 之后，画面因此仍占满整屏。
+   exitFullscreen 不需要用户手势，所以允许在按键手势之外做幂等补偿。 */
+function ensureWindowProjectionNotFullscreen(d) {
+  if (!d) return;
+  const settle = () => {
+    try {
+      const fs = d.fullscreenElement || d.webkitFullscreenElement;
+      if (!fs) return;
+      const fn = d.exitFullscreen || d.webkitExitFullscreen;
+      if (typeof fn !== 'function') return;
+      const q = fn.call(d);
+      if (q && typeof q.catch === 'function') q.catch(() => { /* ignore */ });
+    } catch (e) { /* ignore */ }
+  };
+  try { if (typeof queueMicrotask === 'function') queueMicrotask(settle); } catch (e) { /* ignore */ }
+  try { setTimeout(settle, 80); } catch (e) { /* ignore */ }
+}
+
+/* 移动端不支持 D 的元素级整屏：菜单 / 按钮都不摆点不动的入口。
    判定与 BSAR 侧保持一致（Platform / body.is-mobile / UA），桌面端窄窗口仍按桌面处理。 */
 function isHymnsMobileEnv() {
   try {
@@ -2022,6 +2158,33 @@ function isHymnsMobileEnv() {
         /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)) return true;
   } catch (e) { /* ignore */ }
   return false;
+}
+
+/* 安卓状态栏兜底：Obsidian 会把真实状态栏高度注入 --safe-area-inset-top，
+   但部分 WebView / 老宿主既不给这个变量，env(safe-area-inset-top) 又恒为 0。
+   CSS 已用 max() 优先读宿主变量；这里只在宿主确实没给时，往投影层写一个
+   保守的状态栏高度（24dp），不会盖过真实 inset。 */
+function applyHymnsSafeAreaFallback(el, cssVar) {
+  if (!el || !el.style || typeof el.style.setProperty !== 'function') return;
+  const doc = el.ownerDocument || (typeof document !== 'undefined' ? document : null);
+  if (!doc) return;
+  let host = 0;
+  try {
+    const win = doc.defaultView || (typeof window !== 'undefined' ? window : null);
+    if (win && typeof win.getComputedStyle === 'function') {
+      const roots = [doc.documentElement, doc.body];
+      for (let i = 0; i < roots.length && !host; i++) {
+        if (!roots[i]) continue;
+        host = parseFloat(win.getComputedStyle(roots[i]).getPropertyValue('--safe-area-inset-top')) || 0;
+      }
+    }
+  } catch (e) { /* ignore */ }
+  if (host > 0) return;
+  try {
+    const ua = (typeof navigator !== 'undefined' && navigator.userAgent) ? navigator.userAgent : '';
+    if (!/Android/i.test(ua)) return;
+  } catch (e) { return; }
+  el.style.setProperty(cssVar, '24px');
 }
 
 /* BSAR 是否已安装并启用：只读 Obsidian 插件管理器的状态，不 import 对方代码。
@@ -2118,6 +2281,8 @@ class HymnProjection {
     this._lastPlaying = null;
     this._wheelAcc = 0;
     this._wheelAt = 0;
+    this._panelRows = [];                     // 投影内面板的可选行（↑ ↓ / Enter 用）
+    this._panelCursor = -1;                  // 当前键盘高亮的行
     this._audioEl = null;
     this._projResults = null;                 // 投影内搜索的完整命中列表：搜索后 ← → 顺着结果换诗歌
     this._projSuggestItems = [];              // 候选框里的全部候选项（不再截断 8 条）
@@ -2141,7 +2306,7 @@ class HymnProjection {
     el.className = 'hymns-proj';
     el.tabIndex = -1;
     el.setAttribute('role', 'dialog');
-    el.setAttribute('aria-label', '窗口投影');
+    el.setAttribute('aria-label', '诗歌投影');
     this.el = el;
 
     this.stageEl = el.createDiv({ cls: 'hymns-proj-stage' });
@@ -2206,19 +2371,39 @@ class HymnProjection {
     this.suggestEl = this.searchWrap.createDiv({ cls: 'hymns-proj-suggest' });
     this.suggestEl.style.display = 'none';
 
-    // 五个按钮装进同一个容器：它们是一个整体，换行时一起走，
+    // 七个按钮装进同一个容器：它们是一个整体，换行时一起走，
     // 不会像以前那样只剩关闭按钮单独掉到第二行。
     this.actionsEl = this.toolsEl.createDiv({ cls: 'hymns-proj-actions' });
 
-    this.hymnPrevBtn = this.actionsEl.createEl('button', { cls: 'hymns-proj-btn hymns-proj-hymn-btn', attr: { 'aria-label': '历史回退（←）', title: '历史回退（← / 右滑）' } });
+    this.hymnPrevBtn = this.actionsEl.createEl('button', { cls: 'hymns-proj-btn hymns-proj-hymn-btn', attr: { 'aria-label': '上一首', title: '上一首（← / 右滑）' } });
     setIcon(this.hymnPrevBtn, 'skip-back');
-    this.hymnPrevBtn.addEventListener('click', () => this.switchHymn(-1));
-    this.hymnNextBtn = this.actionsEl.createEl('button', { cls: 'hymns-proj-btn hymns-proj-hymn-btn', attr: { 'aria-label': '历史前进（→）', title: '历史前进（→ / 左滑）' } });
+    this.hymnPrevBtn.addEventListener('click', () => this.switchHymn(1));
+    this.hymnNextBtn = this.actionsEl.createEl('button', { cls: 'hymns-proj-btn hymns-proj-hymn-btn', attr: { 'aria-label': '下一首', title: '下一首（→ / 左滑）' } });
     setIcon(this.hymnNextBtn, 'skip-forward');
-    this.hymnNextBtn.addEventListener('click', () => this.switchHymn(1));
+    this.hymnNextBtn.addEventListener('click', () => this.switchHymn(-1));
     this.playBtn = this.actionsEl.createEl('button', { cls: 'hymns-proj-btn', attr: { 'aria-label': '播放（空格）', title: '播放（空格）' } });
     setIcon(this.playBtn, 'play');
     this.playBtn.addEventListener('click', () => this.togglePlay());
+    // 播放与全屏之间：最近打开记录 / 播放列表。整屏进入 top layer 后 body 上的 Modal
+    // 会被整块盖住，所以两个入口都展开成投影层自己的浮层面板。
+    this.histBtn = this.actionsEl.createEl('button', {
+      cls: 'hymns-proj-btn hymns-proj-panel-btn',
+      attr: { 'aria-label': '最近打开记录', title: '最近打开记录（Esc 收起）' }
+    });
+    setIcon(this.histBtn, 'history');
+    this.histBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.toggleProjectionPanel('recent');
+    });
+    this.playlistBtn = this.actionsEl.createEl('button', {
+      cls: 'hymns-proj-btn hymns-proj-panel-btn',
+      attr: { 'aria-label': '播放列表', title: '播放列表（先选列表，再看诗歌）' }
+    });
+    setIcon(this.playlistBtn, 'list-music');
+    this.playlistBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.toggleProjectionPanel('playlist');
+    });
     if (this.isDesktop) {
       this.fsBtn = this.actionsEl.createEl('button', { cls: 'hymns-proj-btn', attr: { 'aria-label': '全屏投影（O）', title: '全屏投影（O）' } });
       setIcon(this.fsBtn, 'maximize');
@@ -2243,7 +2428,7 @@ class HymnProjection {
     // 底部信息条：诗歌名 / 操作提示 / 页码
     this.barEl = el.createDiv({ cls: 'hymns-proj-bar' });
     this.titleEl = this.barEl.createSpan({ cls: 'hymns-proj-title', text: this.hymn ? hymnLabel(this.hymn) : '诗歌投影' });
-    const hint = '↑ ↓ 翻节 · ← → 投影历史 · 左右拖/滑 同上 · 上下拖/滑 翻节 · 滚轮 翻节 · Enter 搜索换诗歌 · 空格 播放' + (this.isDesktop ? ' · O 全屏' : '') + ' · P / Esc 退出';
+    const hint = '↑ ↓ 翻节 · ← 上一首 · → 下一首 · 左右拖/滑 换诗歌 · 上下拖/滑 翻节 · 滚轮 翻节 · Enter 搜索换诗歌 · 空格 播放' + (this.isDesktop ? ' · O 全屏' : '') + ' · P / Esc 退出';
     this.barEl.createSpan({ cls: 'hymns-proj-hint', text: hint });
     this.pageEl = this.barEl.createSpan({ cls: 'hymns-proj-page', text: '' });
 
@@ -2258,12 +2443,22 @@ class HymnProjection {
     el.addEventListener('pointerdown', () => this.wake());
 
     d.body.appendChild(el);
+    // 安卓状态栏兜底必须在挂载后调用（要读宿主的 computed 变量）
+    applyHymnsSafeAreaFallback(el, '--hymns-android-inset-top');
     d.addEventListener('keydown', this._onKeyDown, true);
     this.win.addEventListener('resize', this._onResize);
     d.addEventListener('fullscreenchange', this._onFsChange);
     this.bindAudio();
 
     this.wake();
+    // 空白首页没有「当前这一首」：先把历史视图从 recent 建好，再把游标放到 -1。
+    // 这样第一次按「上一首」就落在「最近打开」第一行（最近打开的那首），
+    // 再按依次第二、第三行；「下一首」则往面板上方回退。
+    if (!this.hymn) {
+      const pl0 = this.plugin;
+      if (pl0 && typeof pl0.projectionHistory === 'function') pl0.projectionHistory();
+      if (pl0) pl0._projHistoryIndex = -1;
+    }
     this.updateChrome();
     this.syncPlayState();
     try { el.focus({ preventScroll: true }); } catch (e) { /* ignore */ }
@@ -2274,7 +2469,7 @@ class HymnProjection {
       this.showEmptyHint();   // 没有目标诗歌：显示提示，不读 PDF；可在投影内搜索换诗歌（← → 只回到投影过的诗歌）
     }
     if (this._startFs && this.isDesktop) {
-      // 打开即进整屏：必须在用户手势内调用（菜单点击 / O 键都是手势）
+      // 打开即进整屏：必须在用户手势内调用（菜单点击 / P 切模式都是手势）
       this.setFullscreen(true);
     }
   }
@@ -2351,7 +2546,7 @@ class HymnProjection {
     }
   }
 
-  /* 没有目标诗歌时（例如没在预览就按 O / P 打开投影）：铺一张醒目的空状态卡片，不读 PDF。
+  /* 没有目标诗歌时（例如没在预览就按 P 打开投影）：铺一张醒目的空状态卡片，不读 PDF。
      版式是大屏三段式：深色底 + 大号加粗白标题 + 浅灰说明 + 更淡的小字示例，居中。
      用户可在上方搜索框选一首（← → 只用于回到本次会话投过的诗歌）；选到后 setHymn 会撤掉卡片并加载 PDF。 */
   showEmptyHint() {
@@ -2464,44 +2659,54 @@ class HymnProjection {
     return { list, i };
   }
 
-  /* 本次会话「投影过的诗歌」历史：只存在插件实例内存里，不写 data.json，
-     所以重启 Obsidian 后自然清空（用户明确不需要跨启动保留）。
-     行为和浏览器后退/前进一致：退回中间再选新歌时砍掉原来的前进分支。 */
+  /* 投影里打开过的诗歌直接写进「最近打开」（与侧边栏同一份记录、持久化）。
+     addRecent 负责去重、按设置裁剪、同步投影历史视图；这一首随即成为最新一条。 */
   recordProjHymn(h) {
     const pl = this.plugin;
     if (!pl || !h) return;
     const key = h.uid || h.pdfPath;
     if (!key) return;
-    const hist = pl._projHistory || (pl._projHistory = []);
-    let at = Number(pl._projHistoryIndex);
-    if (!Number.isFinite(at) || at < 0 || at >= hist.length) at = -1;
-    const cur = at >= 0 ? hist[at] : null;
-    if (cur && (cur.uid || cur.pdfPath) === key) return;   // 同一首（含切回后恢复投影）不重复记
-    if (at < hist.length - 1) hist.splice(at + 1);          // 砍掉前进分支
-    hist.push(h);
-    if (hist.length > 100) hist.shift();                   // 本次会话最多留 100 首
-    pl._projHistoryIndex = hist.length - 1;
+    try { pl.addRecent(h); } catch (e) { /* 记账失败不影响投影 */ }
+    // 刚记下的这一首就是「最近打开」第一行，游标对齐面板行号 0
+    pl._projHistoryIndex = 0;
   }
 
-  /* ← / →：只在本会话「投影过的诗歌」历史里后退 / 前进。
-     绝不按目录 / 搜索结果列表继续翻出没看过的诗歌：没有历史、或已走到历史端点时什么都不换。
-     历史只存在插件实例内存里（不写 data.json），重启 Obsidian 自然清零。
-     只切换投影里显示的诗歌，不动播放列表、不打断没在放的音频。 */
+  /* 「上一首 / 下一首」直接按「最近打开」面板的行号逐首浏览：
+     _projHistory 与面板同序（最新在前），「上一首」dir=+1 沿面板往下看更早打开过的，
+     「下一首」dir=-1 回到面板上方更近期的一首。空白首页的游标是 -1：
+     第一次按「上一首」就显示面板第一行（最近打开的那首），再按依次第二、第三行；
+     到两端只给提示，绝不循环；导航本身不写回 recent，避免把当前歌顶成第一首。 */
   switchHymn(dir) {
     if (this._closed || dir === 0) return;
     const pl = this.plugin;
-    const hist = (pl && pl._projHistory) || [];
-    const at = Number(pl && pl._projHistoryIndex);
-    const next = at + dir;
-    if (at >= 0 && next >= 0 && next < hist.length) {
-      const h = hist[next];
-      if (h && h.pdfPath) {
-        pl._projHistoryIndex = next;
-        this.setHymn(h, -1, true);       // 历史导航本身不再往历史里压一条
-        return;
-      }
+    // 优先用已缓存的历史视图，避免每次都重建并重设游标（重建会把游标拉回当前歌曲，
+    // 一旦当前歌曲不在 recent 里就会从末尾跳起，表现成「某些歌切不到」）。
+    let hist = (pl && pl._projHistory) || [];
+    if (hist.length === 0 && pl && typeof pl.projectionHistory === 'function') {
+      hist = pl.projectionHistory();
+      if (!this.hymn && pl) pl._projHistoryIndex = -1;
     }
-    new Notice(dir > 0 ? '没有更新的投影历史' : '没有更早的投影历史');
+    const total = hist.length;
+    if (total === 0) { new Notice('投影历史为空'); return; }
+    let at = Number(pl && pl._projHistoryIndex);
+    if (!(at >= -1 && at < total) || Math.floor(at) !== at) {
+      at = -1;
+      const curKey = this.hymn && (this.hymn.uid || this.hymn.pdfPath);
+      if (curKey) {
+        for (let i = 0; i < total; i++) {
+          if ((hist[i].uid || hist[i].pdfPath) === curKey) { at = i; break; }
+        }
+      }
+      if (at < 0 && this.hymn) at = 0;
+      if (pl) pl._projHistoryIndex = at;
+    }
+    const next = at + dir;
+    if (next < 0) { new Notice('已是第一条投影历史'); return; }
+    if (next >= total) { new Notice('已是最后一条投影历史'); return; }
+    const h = hist[next];
+    if (!h || !h.pdfPath) { new Notice(dir > 0 ? '已是最后一条投影历史' : '已是第一条投影历史'); return; }
+    if (pl) pl._projHistoryIndex = next;
+    this.setHymn(h, -1, true);       // 历史导航本身不再往历史里压一条
   }
 
   /* 换到另一首诗歌：更新标题、作废未完成的渲染、释放旧 PDF 与画布，再重新打开。 */
@@ -2529,7 +2734,7 @@ class HymnProjection {
     this.showTip('正在打开投影…');
     this.wake();
     // 与侧边栏同步：只在该面板自身也处于预览时同步「当前查看的诗歌」。
-    // 列表模式下不写 viewHymn，否则退出投影后会残留一首，按 O/P 时容易误判成「还在预览」；
+    // 列表模式下不写 viewHymn，否则退出投影后会残留一首，按 P 时容易误判成「还在预览」；
     // 没预览时投影本就该显示空状态提示。最近打开则无论哪种模式都记上这一首。
     const view = this.view;
     if (view) {
@@ -2549,7 +2754,8 @@ class HymnProjection {
         try { view.playForProjection(h); } catch (e) { /* ignore */ }
       }
     }
-    try { if (this.plugin && this.plugin.addRecent) this.plugin.addRecent(h); } catch (e) { /* ignore */ }
+    // 非历史选歌已在 recordProjHymn(h) 里写过一次；这里绝不再无条件 addRecent，
+    // 否则 ← / → 导航会把当前歌重新顶到最新，历史顺序被改写并来回循环。
     this.syncPlayState();
     this.load();
   }
@@ -2563,13 +2769,25 @@ class HymnProjection {
     // 左右两侧大按钮 = 上一节 / 下一节：到首页 / 末页时置灰
     if (this.prevBtn) this.prevBtn.disabled = this.pageNo <= 1;
     if (this.nextBtn) this.nextBtn.disabled = this.pageNo >= this.total;
-    // 右上角 = 投影历史回退 / 前进：严格按历史游标置灰。左右键不会再按列表探索新诗歌，
-    // 所以按钮也不能因为「列表里还有下一首」而显得可点。
+    // 右上角「上一首 / 下一首」严格按「最近打开」面板行号置灰：
+    // 「上一首」沿面板往下走（dir=+1），空白首页 at=-1 时可用；
+    // 「下一首」回到面板上方（dir=-1），at<=0 时置灰。
     const pl = this.plugin;
-    const hist = (pl && pl._projHistory) || [];
-    const at = Number(pl && pl._projHistoryIndex);
-    if (this.hymnPrevBtn) this.hymnPrevBtn.disabled = !(at > 0 && at < hist.length);
-    if (this.hymnNextBtn) this.hymnNextBtn.disabled = !(at >= 0 && at < hist.length - 1);
+    // 必须和 switchHymn 共用同一份缓存与同一个游标：projectionHistory() 会重新解析
+    // recent 并把 _projHistoryIndex 拉回「当前歌曲」，历史导航走到一半时重建会让
+    // 某些歌曲永远切不到 / 边界按钮错误亮起。缓存为空（索引未就绪）才允许重建一次。
+    let hist = (pl && pl._projHistory) || [];
+    if (hist.length === 0 && pl && typeof pl.projectionHistory === 'function') {
+      hist = pl.projectionHistory();
+      if (!this.hymn && pl) pl._projHistoryIndex = -1;
+    }
+    let at = Number(pl && pl._projHistoryIndex);
+    if (!(at >= -1 && at < hist.length) || Math.floor(at) !== at) {
+      at = this.hymn ? 0 : -1;
+      if (pl) pl._projHistoryIndex = at;
+    }
+    if (this.hymnPrevBtn) this.hymnPrevBtn.disabled = !(hist.length > 0 && at < hist.length - 1);
+    if (this.hymnNextBtn) this.hymnNextBtn.disabled = !(hist.length > 0 && at > 0);
   }
 
   /* ---- 投影内搜索：输入 → 候选 → 点一条直接换诗歌 ----
@@ -2761,7 +2979,7 @@ class HymnProjection {
     this._projPickedUid = h.uid;                 // 再次点搜索框时标出这一首
     this.collapseProjSuggestions();              // 只收起，DOM 与滚动位置留着复现；搜索词也留着
     this.setHymn(h, i);                          // i<0 时不会误写侧边栏的 viewIndex
-    // 选完诗歌就把焦点交还投影层：否则焦点还在搜索框里，← → / 空格 / O / P 都会被
+    // 选完诗歌就把焦点交还投影层：否则焦点还在搜索框里，← → / 空格 / D / P 都会被
     // 输入框吞掉，用户得先按 Esc 才能翻投影历史、换诗歌。搜索词与候选 DOM 都留着，
     // 再点一次搜索框会原样弹回。
     try { if (this.searchEl) this.searchEl.blur(); } catch (e) { /* ignore */ }
@@ -2811,7 +3029,7 @@ class HymnProjection {
       const ax = Math.abs(dx), ay = Math.abs(dy);
       if (Math.max(ax, ay) < 50) return;
       this.wake();
-      if (ax > ay) this.switchHymn(dx < 0 ? 1 : -1);  // 左：下一首 / 右：上一首
+      if (ax > ay) this.switchHymn(dx < 0 ? -1 : 1);  // 左滑：下一首 / 右滑：上一首
       else this.step(dy > 0 ? -1 : 1);                // 下：上一节 / 上：下一节
     });
     this.stageEl.addEventListener('pointercancel', () => { start = null; });
@@ -2826,6 +3044,9 @@ class HymnProjection {
     // 作用在播放条 / 搜索候选框上的滚动交给控件自己处理
     if (this.playbarEl && e.target && this.playbarEl.contains(e.target)) return;
     if (this.searchWrap && e.target && this.searchWrap.contains(e.target)) return;
+    // 「最近打开 / 播放列表」面板里是可滚动列表：滚轮必须交还给 panelBody，
+    // 否则下面的 preventDefault 会把列表滚动整个吃掉，还会顺带误翻页。
+    if (this.panelEl && this.panelEl.parentNode && e.target && this.panelEl.contains(e.target)) return;
     e.preventDefault();
     this.wake();
     const now = Date.now();
@@ -2848,7 +3069,8 @@ class HymnProjection {
     try { this.wake(); } catch (e) { /* ignore */ }
   }
 
-  /* 左上角模式名：诗歌全屏 / 诗歌窗口。整屏状态变化时由 onFullscreenChange() 同步。 */
+  /* 左上角模式名：恢复到已提交版 —— 诗歌全屏(O) / 诗歌窗口(P)，与模式菜单两项一致。
+     整屏状态变化时由 onFullscreenChange() 调 syncModeLabel() 同步。 */
   modeLabel() {
     return this._fullscreen ? '诗歌全屏' : '诗歌窗口';
   }
@@ -2858,7 +3080,7 @@ class HymnProjection {
     try { this.modeBtn.setAttribute('aria-label', '当前：' + this.modeLabel() + '，点击切换投影模式'); } catch (e) { /* ignore */ }
   }
 
-  /* 左上角模式名 → 投影模式选择菜单。诗歌组（O/P）与经文组（Q/W/E）用分隔线 + 分组标题隔开；
+  /* 左上角模式名 → 投影模式选择菜单。诗歌组（P）与经文组（Q/W/E）用分隔线 + 分组标题隔开；
      BSAR 未安装 / 未开启时经文组置灰、分组下写明原因，点击给出投影内可见的提示。 */
   showModeMenu(anchorEl) {
     const el = this.el;
@@ -2897,15 +3119,16 @@ class HymnProjection {
         menu.remove();
         // 点当前模式＝无操作：等价于按同键会把投影直接关掉，那不是用户想要的
         if (o.current) return;
+        // O / P 控制的是「全屏 / 窗口」显示状态，不是投影模式：各自直接切，不走 dispatchModeHotkey
         if (key === 'o') { if (!this._fullscreen) this.setFullscreen(true); return; }
         if (key === 'p') { if (this._fullscreen) this.setFullscreen(false); return; }
-        this.dispatchModeHotkey(key);          // q/w/e → 交给 BSAR 自己的分派
+        this.dispatchModeHotkey(key);          // q / w / e 走合成按键，保持一处语义
       });
       menu.appendChild(row);
       return row;
     };
     addTitle('诗歌投影');
-    // 移动端没有整屏能力，别摆一个点不动的入口（与 BSAR 侧「诗歌全屏」处理一致）
+    // 移动端没有整屏能力，Hymns 的「诗歌全屏」也用不了：只列出「诗歌窗口」
     if (!isHymnsMobileEnv()) addItem('诗歌全屏', 'o', { current: !!this._fullscreen });
     addItem('诗歌窗口', 'p', { current: !this._fullscreen });
     const divider = d.createElement('div');
@@ -2946,6 +3169,225 @@ class HymnProjection {
     return menu;
   }
 
+  /* ===== 投影层内的「最近打开 / 播放列表」面板 =====
+     整屏进入 top layer 后挂在 body 上的 Modal / Notice 会被整块盖住，所以两个入口
+     都展开成投影层自己的浮层（与模式菜单同一套做法）。播放列表是两级：
+     先选列表（含「当前播放列表（实时）」），再看其中的诗歌，点一首才投影。 */
+  closeProjectionPanel() {
+    try { if (this.panelEl && this.panelEl.parentNode) this.panelEl.remove(); } catch (e) { /* ignore */ }
+    this.panelEl = null;
+    this._panelKind = null;
+    this._panelRows = [];
+    this._panelCursor = -1;
+    if (this._panelDocClick) {
+      try { (this.docEl || document).removeEventListener('click', this._panelDocClick, true); } catch (e) { /* ignore */ }
+      this._panelDocClick = null;
+    }
+  }
+
+  panelText(el, s) {
+    if (!el) return;
+    if (typeof el.setText === 'function') el.setText(s);
+    else el.textContent = s;
+  }
+
+  panelClear() {
+    if (!this.panelBody) return;
+    this._panelRows = [];
+    this._panelCursor = -1;
+    try {
+      if (typeof this.panelBody.empty === 'function') this.panelBody.empty();
+      else this.panelBody.innerHTML = '';
+    } catch (e) { /* ignore */ }
+  }
+
+  /* 面板里的一行诗歌 / 一张列表：统一样式与点击行为 */
+  addPanelRow(label, meta, isCurrent, onClick, extraCls) {
+    const row = this.panelBody.createEl('button', {
+      cls: 'hymns-proj-panel-row' + (isCurrent ? ' is-current' : '') + (extraCls ? ' ' + extraCls : ''),
+      attr: { type: 'button', title: label }
+    });
+    const name = row.createEl('span', { cls: 'hymns-proj-panel-row-label' });
+    this.panelText(name, label);
+    if (meta) {
+      const m = row.createEl('span', { cls: 'hymns-proj-panel-row-meta' });
+      this.panelText(m, meta);
+    }
+    row.addEventListener('click', (e) => { e.stopPropagation(); onClick(); });
+    if (!this._panelRows) this._panelRows = [];
+    this._panelRows.push(row);
+    return row;
+  }
+
+  /* 面板键盘游标：↑ ↓ / Home / End 移动高亮，Enter（确定键）触发当前行。
+     与鼠标点击走同一个 click handler，所以两级播放列表的「返回 / 进列表」也能用键盘走完。 */
+  setPanelCursor(idx) {
+    const rows = this._panelRows || [];
+    if (!rows.length) return;
+    const prev = this._panelCursor;
+    if (prev >= 0 && rows[prev] && rows[prev].classList) {
+      try { rows[prev].classList.remove('is-cursor'); } catch (e) { /* ignore */ }
+    }
+    const next = Math.max(0, Math.min(rows.length - 1, idx));
+    this._panelCursor = next;
+    const row = rows[next];
+    if (!row) return;
+    if (row.classList) { try { row.classList.add('is-cursor'); } catch (e) { /* ignore */ } }
+    // 长列表把高亮行带进可视区；DOM 桩 / 老 WebView 没有这个方法就跳过
+    if (typeof row.scrollIntoView === 'function') {
+      try { row.scrollIntoView({ block: 'nearest' }); } catch (e) { /* ignore */ }
+    }
+  }
+  movePanelCursor(dir) {
+    const rows = this._panelRows || [];
+    if (!rows.length) return;
+    const prev = this._panelCursor;
+    this.setPanelCursor(prev < 0 ? (dir > 0 ? 0 : rows.length - 1) : prev + dir);
+  }
+  activatePanelCursor() {
+    const rows = this._panelRows || [];
+    // 没按过 ↑ ↓ 时，Enter 默认落在第一行，免得用户以为按键没反应
+    const idx = this._panelCursor >= 0 ? this._panelCursor : 0;
+    const row = rows[idx];
+    if (!row || typeof row.click !== 'function') return;
+    row.click();
+    // 选歌后面板会关闭；此时把焦点移出已移除的历史行，否则下一次 Enter 仍落在面板里。
+    const panelClosed = !this.panelEl || !this.panelEl.parentNode;
+    if (panelClosed) this.focusProjectionAfterPanelPick();
+  }
+
+  /* Enter / 鼠标选歌后收起面板时，把焦点交还投影层本身。
+     播放列表两级导航时面板仍在，不要抢焦点，否则键盘无法继续选列表。 */
+  focusProjectionAfterPanelPick() {
+    try {
+      const d = this.docEl || (typeof document !== 'undefined' ? document : null);
+      const ae = d && d.activeElement;
+      const isRow = !!(ae && ae.classList && typeof ae.classList.contains === 'function' &&
+        ae.classList.contains('hymns-proj-panel-row'));
+      if (isRow && typeof ae.blur === 'function') ae.blur();
+    } catch (e) { /* ignore */ }
+    try { if (this.el && this.el.focus) this.el.focus({ preventScroll: true }); } catch (e) { /* ignore */ }
+  }
+
+  panelEmpty(text) {
+    const el = this.panelBody.createEl('div', { cls: 'hymns-proj-panel-empty' });
+    this.panelText(el, text);
+  }
+
+  toggleProjectionPanel(kind) {
+    if (!this.el || this._closed) return null;
+    // 再点同一个按钮＝收起
+    if (this.panelEl && this._panelKind === kind && this.panelEl.parentNode) {
+      this.closeProjectionPanel();
+      return null;
+    }
+    this.closeProjectionPanel();
+    this._panelKind = kind;
+    const panel = this.el.createEl('div', { cls: 'hymns-proj-panel' });
+    this.panelEl = panel;
+    try { panel.addEventListener('click', (ev) => ev.stopPropagation()); } catch (e) { /* ignore */ }
+    const head = panel.createEl('div', { cls: 'hymns-proj-panel-head' });
+    this.panelTitle = head.createEl('span', { cls: 'hymns-proj-panel-title' });
+    const close = head.createEl('button', {
+      cls: 'hymns-proj-panel-close',
+      attr: { type: 'button', 'aria-label': '收起面板', title: '收起面板（Esc）' }
+    });
+    setIcon(close, 'x');
+    close.addEventListener('click', (e) => { e.stopPropagation(); this.closeProjectionPanel(); });
+    this.panelBody = panel.createEl('div', { cls: 'hymns-proj-panel-body' });
+    this.panelFoot = panel.createEl('div', { cls: 'hymns-proj-panel-foot' });
+    if (kind === 'recent') this.renderRecentPanel();
+    else this.renderPlaylistPanel(null);
+    // 点面板以外的地方收起（延后一拍，避免本次 click 立刻把自己关掉）
+    setTimeout(() => {
+      // 面板可能在延时期间已被收起 / 投影已关闭：别再挂一个多余的 document 监听
+      if (this._closed || !this.panelEl || !this.panelEl.parentNode) return;
+      const onDoc = (ev) => {
+        if (this._closed || !this.panelEl || !this.panelEl.parentNode) {
+          this.closeProjectionPanel(); return;
+        }
+        const t = ev && ev.target;
+        if (t && this.panelEl.contains(t)) return;
+        if (t && t.closest && t.closest('.hymns-proj-panel-btn')) return;
+        this.closeProjectionPanel();
+      };
+      this._panelDocClick = onDoc;
+      try { (this.docEl || document).addEventListener('click', onDoc, true); } catch (e) { /* ignore */ }
+    }, 0);
+    try { this.wake(); } catch (e) { /* ignore */ }
+    return panel;
+  }
+
+  /* 第一级面板：最近打开（＝投影历史，同一份记录，最新在上） */
+  renderRecentPanel() {
+    if (!this.panelBody) return;
+    this.panelClear();
+    const pl = this.plugin;
+    const limit = clampRecentLimit(pl && pl.settings && pl.settings.recentLimit);
+    const codes = ((pl && pl.recent) || []).slice(0, limit);
+    this.panelText(this.panelTitle, '🕘 最近打开（' + codes.length + ' 首）');
+    const curKey = this.hymn && (this.hymn.uid || this.hymn.pdfPath);
+    let shown = 0;
+    for (let i = 0; i < codes.length; i++) {
+      let h = null;
+      try { h = pl && pl.resolveHymn ? pl.resolveHymn(codes[i]) : null; } catch (e) { /* ignore */ }
+      if (!h || !h.pdfPath) continue;
+      shown++;
+      const isCurrent = !!curKey && (h.uid || h.pdfPath) === curKey;
+      this.addPanelRow(hymnLabel(h), isCurrent ? '正在投影' : '', isCurrent, () => {
+        this.setHymn(h);
+        this.closeProjectionPanel();
+        this.focusProjectionAfterPanelPick();
+        try { this.wake(); } catch (e) { /* ignore */ }
+      });
+    }
+    if (!shown) this.panelEmpty('还没有最近打开的诗歌，投影内搜索或侧边栏预览后会记在这里。');
+    this.panelText(this.panelFoot, '点一首即投影 · 最多保留 ' + limit + ' 首（设置里可改） · ↑ ↓ 选择 · Enter 确定 · Esc 收起');
+  }
+
+  /* 第二级面板：播放列表。name 为空＝列出所有列表；否则列出该列表里的诗歌。 */
+  renderPlaylistPanel(name) {
+    if (!this.panelBody) return;
+    this.panelClear();
+    const pl = this.plugin;
+    const lists = (pl && pl.playlists) || [];
+    const curCodes = (pl && pl.currentSequence) || [];
+    if (!name) {
+      this.panelText(this.panelTitle, '🎵 播放列表');
+      this.addPanelRow('当前播放列表（实时）', curCodes.length + ' 首', false,
+        () => this.renderPlaylistPanel(CUR_PLAYLIST));
+      for (let i = 0; i < lists.length; i++) {
+        const item = lists[i];
+        const label = item.name + (item.builtin ? '（默认）' : '');
+        const count = ((item.codes || []).length) + ' 首';
+        this.addPanelRow(label, count, false, () => this.renderPlaylistPanel(item.name));
+      }
+      if (!lists.length && !curCodes.length) this.panelEmpty('还没有播放列表，可在侧边栏里新建。');
+      this.panelText(this.panelFoot, '先选一张列表，再点其中的诗歌投影 · ↑ ↓ 选择 · Enter 确定 · Esc 收起');
+      return;
+    }
+    const isCur = name === CUR_PLAYLIST;
+    const codes = isCur ? curCodes.slice()
+      : ((lists.find((x) => x.name === name) || { codes: [] }).codes || []).slice();
+    this.panelText(this.panelTitle, (isCur ? '当前播放列表（实时）' : name) + '（' + codes.length + ' 首）');
+    this.addPanelRow('← 返回播放列表', '', false, () => this.renderPlaylistPanel(null), 'hymns-proj-panel-back');
+    let shown = 0;
+    for (let i = 0; i < codes.length; i++) {
+      let h = null;
+      try { h = pl && pl.resolveHymn ? pl.resolveHymn(codes[i]) : null; } catch (e) { /* ignore */ }
+      if (!h || !h.pdfPath) continue;
+      shown++;
+      this.addPanelRow(hymnLabel(h), String(i + 1), false, () => {
+        this.setHymn(h);
+        this.closeProjectionPanel();
+        this.focusProjectionAfterPanelPick();
+        try { this.wake(); } catch (e) { /* ignore */ }
+      });
+    }
+    if (!shown) this.panelEmpty('这张列表里还没有可投影的诗歌。');
+    this.panelText(this.panelFoot, '点一首即投影（不改动当前播放列表） · ↑ ↓ 选择 · Enter 确定 · Esc 收起');
+  }
+
   /* 把「点菜单里的经文项」变成「按一次 Q/W/E」：合成 keydown 派发到 body，
      让 BSAR 既有的插件级分派接管（它会派发 hymns:projection-close 请本投影收起）。
      派发到 document 会让两边都在同节点 at-target 执行，stopPropagation 拦不住彼此。 */
@@ -2974,19 +3416,51 @@ class HymnProjection {
 
   handleKey(e) {
     if (this._closed || e.isComposing) return;
-    if (e._hymnsHandled) return;                 // 同一按键若已被视图层（O/P/[ ]）处理过，这里不再重复处理
+    if (e._hymnsHandled) return;                 // 同一按键若已被视图层（P/[ ]）处理过，这里不再重复处理
     const k = e.key;
-    // 模式菜单开着时第一次 ESC 只收菜单，第二次才关投影（与 BSAR 侧一致）
-    if (k === 'Escape' && this.el && typeof this.el.querySelector === 'function') {
-      const menu = this.el.querySelector('.hymns-proj-mode-menu');
-      if (menu) {
-        e.preventDefault(); e.stopPropagation();
-        menu.remove();
+    // 浮层开着时第一次 ESC 只收浮层，第二次才关投影（与 BSAR 侧一致）。
+    // 最近打开 / 播放列表面板打开期间，其余快捷键一律让行：否则点着列表按空格
+    // 会误触发播放、按 P 会直接把投影关掉。
+    if (this.el && typeof this.el.querySelector === 'function') {
+      const panel = this.panelEl && this.panelEl.parentNode
+        ? this.panelEl : this.el.querySelector('.hymns-proj-panel');
+      if (panel) {
+        if (k === 'Escape') {
+          e.preventDefault(); e.stopPropagation();
+          this.closeProjectionPanel();
+          return;
+        }
+        // ↑ ↓ / Home / End 移动面板高亮，Enter（确定键）投影当前诗歌。
+        // 面板打开期间其余快捷键仍一律让行（空格 / P / D 不误触发播放、关投影、切整屏）。
+        if (k === 'ArrowDown' || k === 'ArrowUp' || k === 'PageDown' || k === 'PageUp') {
+          e.preventDefault(); e.stopPropagation();
+          this.movePanelCursor((k === 'ArrowDown' || k === 'PageDown') ? 1 : -1);
+          return;
+        }
+        if (k === 'Home' || k === 'End') {
+          e.preventDefault(); e.stopPropagation();
+          const total = (this._panelRows || []).length;
+          if (total) this.setPanelCursor(k === 'Home' ? 0 : total - 1);
+          return;
+        }
+        if (k === 'Enter') {
+          e.preventDefault(); e.stopPropagation();
+          this.activatePanelCursor();
+          return;
+        }
         return;
+      }
+      if (k === 'Escape') {
+        const menu = this.el.querySelector('.hymns-proj-mode-menu');
+        if (menu) {
+          e.preventDefault(); e.stopPropagation();
+          menu.remove();
+          return;
+        }
       }
     }
     // 焦点在投影搜索框 / 候选框里时，全局快捷键全部让位给输入：
-    // 否则打空格就播放、按 P 直接退出投影、按 O 全屏、方向键变成翻页。
+    // 否则打空格就播放、按 P 切回窗口 / 退出投影、按 O 全屏、方向键变成翻页。
     const t = e && e.target;
     const inSearch = !!(this.searchEl && (t === this.searchEl ||
       (this.searchWrap && this.searchWrap.contains && this.searchWrap.contains(t))));
@@ -3042,13 +3516,20 @@ class HymnProjection {
       showBibleRequiredNotice(this.el, false);
       return;
     }
-    if (k === 'o' || k === 'O') {
-      if (!this.isDesktop) return;
+    // O：整屏 ↔ 诗歌投影全屏。整屏态按 O → 关闭投影；窗口态按 O → 切到整屏。
+    // 这是「诗歌投影的全屏」快捷键（与经文投影的 D 各管各的），不是一种投影模式。
+    // 移动端没有元素级 Fullscreen API，沿用 BSAR 的做法给一句明确提示。
+    if ((k === 'o' || k === 'O') && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
       e.preventDefault(); e.stopPropagation();
-      if (this._fullscreen) this.close(); else this.setFullscreen(true);   // 整屏→关闭；窗口→整屏
+      if (!this.isDesktop || isHymnsMobileEnv()) {
+        try { new Notice('移动端不支持全屏投影'); } catch (err) { /* ignore */ }
+        return;
+      }
+      if (this._fullscreen) this.close(); else this.setFullscreen(true);
       return;
     }
-    // P：窗口投影 → 关闭；整屏投影 → 切回窗口投影。带修饰键时放行（如 Ctrl/Cmd+P 想打印 PDF）
+    // P：诗歌投影的同键开关 —— 整屏态按 P 退回窗口；窗口态按 P 直接关闭投影。
+    // 带修饰键时放行（如 Ctrl/Cmd+P 想打印 PDF）
     if ((k === 'p' || k === 'P') && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
       e.preventDefault(); e.stopPropagation();
       if (this._fullscreen) this.setFullscreen(false); else this.close();
@@ -3067,7 +3548,7 @@ class HymnProjection {
     }
     if (k === 'ArrowLeft' || k === 'ArrowRight') {
       e.preventDefault(); e.stopPropagation();
-      this.switchHymn(k === 'ArrowLeft' ? -1 : 1);
+      this.switchHymn(k === 'ArrowLeft' ? 1 : -1);
       return;
     }
   }
@@ -3099,12 +3580,12 @@ class HymnProjection {
     if (this.el.style) this.el.style.transform = '';
   }
 
-  /* ---- 全屏（桌面端）：O 键 / ⛶ 按钮控制。
-     setFullscreen(true)：当前是窗口投影 → 进入整屏；已是整屏 → 无操作。
-     setFullscreen(false)：当前是整屏 → 退出整屏但保留窗口投影；已是窗口 → 无操作。
-     ⛶ 按钮：窗口 ↔ 整屏来回切换（保留投影）。
-     O 键语义（见 handleKey）：窗口投影 → 整屏；整屏投影 → 直接关闭整个投影。
-     P 键语义（见 handleKey）：整屏投影 → 切回窗口投影；窗口投影 → 关闭。 */
+  /* ---- 全屏（桌面端）：O / ⛶ 进入整屏，P / D / ⛶ 退回窗口。
+     setFullscreen(true)：进入整屏；已是整屏 → 无操作。
+     setFullscreen(false)：退出整屏但保留诗歌投影；已是窗口 → 无操作。
+     ⚠️ 持久整屏意图只在 requestFullscreen() 真正成功后写 true；失败一律写 false，
+     否则「切模式时请求失败」会残留 true，导致下次 P 打开窗口也被误判成要全屏。
+     关闭投影统一交给 P / O 同键开关 / Esc / ✕，切投影模式交给 Q/W/E。 */
   /* 只认「本投影自己」的整屏元素。document.fullscreenElement 是全局的：
      经文投影进 / 出整屏时也会触发本插件的 fullscreenchange，若照单全收，
      会把窗口态的诗歌投影误标成整屏，下一次 ESC 就被当成「原生退出整屏」而放空。 */
@@ -3122,15 +3603,26 @@ class HymnProjection {
       // 来回切模式时，上一次「主动退出整屏」的标记可能还没被 fullscreenchange 消费；
       // 留到这次进入整屏，用户按 ESC 就会被误判成主动切换而不关投影 → ESC 偶发失灵。
       this._exitFsByToggle = false;
-      if (typeof el.requestFullscreen !== 'function') { new Notice('当前环境不支持整屏投影'); return; }
+      if (typeof el.requestFullscreen !== 'function') {
+        setProjectionFsIntent(false);
+        new Notice('当前环境不支持整屏投影');
+        return;
+      }
       try {
         const p = el.requestFullscreen({ navigationUI: 'hide' });
-        if (p && typeof p.then === 'function') p.then(() => this.onFullscreenChange()).catch(() => { /* ignore */ });
-      } catch (e) { /* ignore */ }
+        if (p && typeof p.then === 'function') {
+          p.then(() => { setProjectionFsIntent(true); this.onFullscreenChange(); })
+            .catch(() => { setProjectionFsIntent(false); });
+        } else {
+          setProjectionFsIntent(true);       // 同步无 Promise 的老实现：视为已请求
+        }
+      } catch (e) { setProjectionFsIntent(false); }
     } else {
+      // 窗口态：明确清掉持久整屏意图，避免窗口投影按 Q/W/E 被误带成全屏
+      setProjectionFsIntent(false);
       if (!this._fullscreen) return;
       if (!this.ownFullscreenElement()) { this._fullscreen = false; return; }
-      this._exitFsByToggle = true;            // 主动退出整屏 → 保留窗口投影
+      this._exitFsByToggle = true;            // 主动退出整屏 → 保留诗歌投影
       try { this.docEl.exitFullscreen(); } catch (e) { this._exitFsByToggle = false; /* ignore */ }
     }
   }
@@ -3233,11 +3725,44 @@ class HymnProjection {
   close() {
     if (this._closed) return;
     this._closed = true;
+    this.closeProjectionPanel();   // 历史 / 播放列表面板别留在已移除的投影层上
     const d = this.docEl;
+    // 被经文投影请走、且本层此刻确实占着整屏：DOM 摘除必须延后（见下方说明）。
+    // 一定要在 _fullscreen 被清零、this.el 被置空之前读，否则拿不到真实状态。
+    const handoffFs = !!(this._closingForBible && (this._fullscreen || this.ownFullscreenElement()));
+    // 整屏交接：本投影占着整屏、而画面要交还经文投影时先把状态记下来。
+    // 经文投影层已挂载 → BSAR 的 fullscreenchange 监听会重新 requestFullscreen；
+    // 经文投影「根本没开、按 Q/W/E 才新建」→ 新建后由 BSAR 消费同一个标记。
+    // 用户只是关掉诗歌投影回到笔记（下面没有经文投影层、也不是被请走）时不写标记。
+    // 被经文投影请走＝切换投影模式：整屏元素已由对方在按键手势内接管过去，
+    // 这里绝不调 exitFullscreen()（它是全局的，会把对方刚请求的整屏一起退掉）。
+    // 整屏意图必须按「本投影此刻真实的整屏状态」写：全屏态交接→保持 true（Q/W/E 切过去仍是整屏），
+    // 窗口态交接→写 false（绝不能无条件写 true，否则会污染持久意图，导致后续跨插件切换被强制全屏并来回翻转）。
+    if (this._closingForBible) {
+      // 用「此刻真实的整屏状态」交接：_fullscreen 标志可能还没被异步的
+      // fullscreenchange 更新，DOM 快照（handoffFs）补上这一瞬间的偏差。
+      const wasFs = handoffFs;
+      setProjectionFsIntent(wasFs);
+      markProjectionFullscreenHandoff(wasFs);
+    } else if (this.ownFullscreenElement()) {
+      let bibleBelow = false;
+      try {
+        bibleBelow = !!(d && typeof d.querySelector === 'function' &&
+          d.querySelector(BIBLE_PROJECTION_SELECTOR));
+      } catch (e) { /* ignore */ }
+      setProjectionFsIntent(false);
+      markProjectionFullscreenHandoff(bibleBelow);
+    } else {
+      // 窗口态关闭也要明确写 false：清掉可能残留的整屏意图与旧标记，
+      // 否则紧接着「窗口态切模式」会被误带成整屏。
+      setProjectionFsIntent(false);
+      markProjectionFullscreenHandoff(false);
+    }
     // 先退出整屏并立即把投影层从 DOM 摘掉——瞬间消失、打断整屏过渡动画，
     // 避免「先缩回窗口 + 冻结（PDF 释放耗时）再消失」的卡顿。资源释放放后面，不挡画面。
-    // 只退出「本投影自己」的整屏；别的插件（经文投影）占着整屏时不许顺手把它关掉
-    if (this.ownFullscreenElement()) {
+    // 只退出「本投影自己」的整屏；别的插件（经文投影）占着整屏时不许顺手把它关掉。
+    // ⚠️ 切模式（_closingForBible）时跳过：整屏已在对方层上，exitFullscreen 会把它一起退掉。
+    if (!this._closingForBible && this.ownFullscreenElement()) {
       try { d.exitFullscreen(); } catch (e) { /* ignore */ }
     }
     this._fullscreen = false;
@@ -3246,7 +3771,41 @@ class HymnProjection {
       const menu = this.modeWrap.querySelector('.hymns-proj-mode-menu');
       if (menu) menu.remove();
     }
-    if (this.el && this.el.parentNode) this.el.remove();
+    if (this.el) {
+      const el = this.el;
+      if (handoffFs && d) {
+        // ⚠️ 整屏交接：本层还是 fullscreenElement，立刻 remove 会触发浏览器「自动退出整屏」，
+        // 与 BSAR 在按键手势内 requestFullscreen 抢同一个异步队列 → 经文投影变窗口，
+        // 而且时好时坏、来回切第二次必现。先隐藏露出经文层，等 fullscreenchange
+        // 确认整屏已交给对方（或已退出）后再摘除；超时兜底保证绝不会残留图层。
+        try { el.style.visibility = 'hidden'; el.style.pointerEvents = 'none'; } catch (e) { /* ignore */ }
+        let finished = false;
+        let timer = null;
+        const onChange = () => {
+          const fs = d.fullscreenElement || d.webkitFullscreenElement;
+          const stillMine = !!(fs && (fs === el || (typeof el.contains === 'function' && el.contains(fs))));
+          if (!stillMine) finish();
+        };
+        const finish = () => {
+          if (finished) return;
+          finished = true;
+          try { d.removeEventListener('fullscreenchange', onChange); } catch (e) { /* ignore */ }
+          try { if (timer !== null) clearTimeout(timer); } catch (e) { /* ignore */ }
+          try {
+            const fs = d.fullscreenElement || d.webkitFullscreenElement;
+            if (fs && (fs === el || (typeof el.contains === 'function' && el.contains(fs)))) {
+              const fn = d.exitFullscreen || d.webkitExitFullscreen;
+              if (typeof fn === 'function') { const q = fn.call(d); if (q && q.catch) q.catch(() => {}); }
+            }
+          } catch (e) { /* ignore */ }
+          try { if (el.parentNode) el.remove(); } catch (e) { /* ignore */ }
+        };
+        d.addEventListener('fullscreenchange', onChange);
+        timer = setTimeout(finish, 240);
+      } else {
+        try { el.remove(); } catch (e) { /* ignore */ }
+      }
+    }
     this.el = null;
     try { d.removeEventListener('keydown', this._onKeyDown, true); } catch (e) { /* ignore */ }
     try { d.removeEventListener('fullscreenchange', this._onFsChange); } catch (e) { /* ignore */ }
@@ -3606,16 +4165,17 @@ class HymnsView extends ItemView {
       return;
     }
     const h = this.launchTargetHymn();
-    this.openProjection(h || null, mode === 'fullscreen');
+    // 菜单项明确写了「窗口投影 (P) / 全屏投影 (O)」：按指定模式打开，不继承旧整屏状态
+    this.openProjection(h || null, mode === 'fullscreen', { explicitMode: true });
   }
 
   /* 右上角启动按钮弹出的三选项菜单。
-     目标诗歌 h 可能为空（没在预览）：此时窗口/全屏投影会打开并显示提示，标签页面板则显示首页。
+     目标诗歌 h 可能为空（没在预览）：此时窗口 / 全屏投影会打开并显示提示，标签页面板则显示首页。
      第三项与 [ 共用 toggleHymnsTabPanel()：面板在后台就切到它，面板正显示就关闭。 */
   showLaunchMenu(evt) {
     const menu = new Menu();
-    menu.addItem((i) => i.setTitle('窗口投影  (P)').setIcon('presentation')
-      .onClick(() => this.launchProjection('window')));
+      menu.addItem((i) => i.setTitle('窗口投影  (P)').setIcon('presentation')
+        .onClick(() => this.launchProjection('window')));
     if (!this.app.isMobile) {
       menu.addItem((i) => i.setTitle('全屏投影  (O)').setIcon('maximize')
         .onClick(() => this.launchProjection('fullscreen')));
@@ -3801,36 +4361,67 @@ class HymnsView extends ItemView {
     this.openInViewer(h);
   }
 
-  /* ---- 窗口投影 ----
-     会众唱诗时把一首诗歌投到大屏：一个屏幕一页 PDF，↑↓ 翻页 / ←→ 换诗歌，Esc / ✕ 退出。
-     入口：右上角启动菜单、列表「更多」菜单、O / P 快捷键；投影本身是插件级单例。 */
+  /* ---- 诗歌投影 ----
+     会众唱诗时把一首诗歌投到大屏：一个屏幕一页 PDF，↑↓ 翻页 / ←→ 换诗歌，Esc / P / ✕ 退出。
+     入口：右上角启动菜单、列表「更多」菜单、P 快捷键；投影本身是插件级单例。
+     D 只改整屏状态，不开关投影。 */
   openProjection(h, fullscreen = false, opts = null) {
     // 与 Bible 投影互切：Q/W/E 切回经文投影时，诗歌投影是被「请走」而不是用户主动关掉的。
-    // 那一次会在插件上留一个恢复点，下次按 O/P 直接回到原来那首（连页码一起）。
+    // 那一次会在插件上留一个恢复点，下次按 P 直接回到原来那首（连页码一起）。
     // 只有快捷键路径传 opts.resume；右键菜单 / 启动菜单明确指定了诗歌时不受影响。
     const resume = (opts && opts.resume) ? (this.plugin._projResume || null) : null;
     this.plugin._projResume = null;   // 一次性：用过即作废，之后普通打开仍走原来的规则
     // 只允许在「仍在预览」时回退到 viewHymn。从预览退回列表后 viewHymn 并不会被清掉，
-    // 以前这里无条件 `h || this.viewHymn`，导致退出预览再按 O / P 仍会投影上一首诗歌；
+    // 以前这里无条件 `h || this.viewHymn`，导致退出预览再按 P 仍会投影上一首诗歌；
     // 现在统一走 launchTargetHymn()（列表模式一律 null → 投影显示空状态提示）。
     const hymn = (resume && resume.hymn) ? resume.hymn : (h || this.launchTargetHymn() || null);
     // 没有可用诗歌：仍打开投影层并显示提示，而不是弹 Notice 后直接返回；
     // 有了诗歌却没 PDF 时才提示无法投影。
     if (hymn && !hymn.pdfPath) { new Notice('该诗歌暂无 PDF，无法投影'); return; }
     if (this.plugin._projection) { try { this.plugin._projection.close(); } catch (e) { /* ignore */ } this.plugin._projection = null; }
-    const startFs = fullscreen && !this.app.isMobile;   // 整屏概念仅桌面端
+    // ⚠️ P / O / 启动菜单 / 右键菜单都是「显式指定模式」：P 必须窗口、O 必须全屏，
+    // 绝不继承持久整屏意图或经文投影此刻的整屏状态（旧实现会把按 P 切过来的诗歌
+    // 投影也变成全屏）。先清残留意图与一次性交接标记；真正进入整屏后由
+    // setFullscreen() 在 requestFullscreen 成功时才写回 true，失败保持窗口态。
+    // 只有非显式入口（旧版兼容 / 其它调用方）才沿用意图与 DOM 快照。
+    const explicitMode = !!(opts && opts.explicitMode);
+    let startFs;
+    if (explicitMode) {
+      setProjectionFsIntent(false);
+      markProjectionFullscreenHandoff(false);
+      startFs = !this.app.isMobile && !!fullscreen;
+      // 窗口模式：把「刚才还在经文投影层上」的浏览器整屏明确退掉，
+      // 否则旧层被移除前画面仍占着整屏，看不出已经切回窗口诗歌投影。
+      if (!startFs) {
+        try {
+          const d = this.containerEl && this.containerEl.ownerDocument;
+          if (d && d.fullscreenElement && typeof d.exitFullscreen === 'function') {
+            const q = d.exitFullscreen();
+            if (q && typeof q.catch === 'function') q.catch(() => { /* ignore */ });
+          }
+        } catch (e) { /* ignore */ }
+      }
+    } else {
+      startFs = !this.app.isMobile &&
+        (fullscreen || getProjectionFsIntent() || bibleProjectionWantsFullscreen());
+    }
     const p = new HymnProjection(this.app, this.plugin, hymn, this.containerEl.ownerDocument, this, startFs);
     if (resume && resume.hymn) p._resumePageNo = Math.max(1, Number(resume.pageNo) || 1);
     p.onClose = () => {
       if (this.plugin._projection === p) this.plugin._projection = null;
       // 用户自己按 Esc/P/✕ 关掉投影＝这一轮投影结束了，不留恢复点；
-      // 被经文投影请走（_closingForBible）时恢复点要留着给下一次 O/P。
+      // 被经文投影请走（_closingForBible）时恢复点要留着给下一次 P。
       if (!p._closingForBible) this.plugin._projResume = null;
       // 退出投影后把焦点还给预览区，方便立刻再按 P
       if (this.mode === 'viewer') { try { this.viewerWrap.focus({ preventScroll: true }); } catch (e) { /* ignore */ } }
     };
     this.plugin._projection = p;
     p.open();
+    // 窗口模式再补一次幂等的整屏退出：经文层是在本监听之后的冒泡阶段才被移除的，
+    // 那时 fullscreenElement 可能又被「带回来」，画面才看起来仍占满整个屏幕。
+    if (explicitMode && !startFs) {
+      ensureWindowProjectionNotFullscreen(this.containerEl && this.containerEl.ownerDocument);
+    }
   }
 
   /* ---- 给投影用的播放控制 ----
@@ -3854,8 +4445,9 @@ class HymnsView extends ItemView {
     this.playForProjection(h);
   }
 
-  /* 按 P：打开 / 关闭「窗口投影」，或在两种投影之间切换。
-     没预览时也能用：没预览 → 打开投影提示态（或切换/关闭已有的投影）。
+  /* 按 P：打开 / 关闭「窗口投影」。整屏里按 P 先退回窗口，窗口里再按 P 才关闭投影。
+     没预览时也能用：没预览 → 打开投影提示态。⚠️ P 恒定窗口：即使刚从整屏的
+     经文投影切来，也不继承对方的整屏状态（explicitMode 已在 openProjection 里清掉）。
      文档级捕获监听，焦点不限于本视图；输入框 / 编辑器里打字时不触发。
      多个 Hymns 面板（侧边栏 + 新标签页）共用同一份快捷键监听，用 e._hymnsHandled 保证同一次按键只被处理一次。 */
   onProjectionHotkey(e) {
@@ -3878,7 +4470,36 @@ class HymnsView extends ItemView {
     e._hymnsHandled = true;
     const h = this.launchTargetHymn();
     e.preventDefault(); e.stopPropagation();
-    this.openProjection(h || null, false, { resume: true });   // 优先恢复被经文投影挤走的那首
+    // P 恒定窗口：即使刚从整屏的经文投影切过来，也必须是窗口版诗歌投影
+    this.openProjection(h || null, false, { resume: true, explicitMode: true });
+  }
+
+  /* 按 O：打开 / 关闭「全屏投影」，或在两种投影之间切换（桌面端）。
+     没预览时也能用：没预览 → 打开全屏投影提示态（或切换/关闭已有的投影）。
+     文档级捕获监听，焦点不限于本视图；输入框 / 编辑器里打字时不触发。 */
+  onFullscreenHotkey(e) {
+    if (e.defaultPrevented || e.isComposing) return;
+    if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+    if (e.key !== 'o' && e.key !== 'O') return;
+    if (this.app.isMobile) return;                       // 整屏概念仅桌面端
+    const t = e.target;
+    if (t && t.closest && t.closest('input, textarea, select, [contenteditable="true"]')) return;
+    const proj = this.plugin._projection;
+    if (proj && !proj._closed) {
+      if (proj.el && proj.el.contains(t)) return;         // 焦点就在投影层内 → 交给投影自身处理
+      if (e._hymnsHandled) return;
+      e._hymnsHandled = true;
+      e.preventDefault(); e.stopPropagation();
+      if (proj._fullscreen) proj.close();                 // 整屏投影按 O → 关闭
+      else proj.setFullscreen(true);                      // 窗口投影按 O → 切到整屏
+      return;
+    }
+    if (e._hymnsHandled) return;
+    e._hymnsHandled = true;
+    const h = this.launchTargetHymn();
+    e.preventDefault(); e.stopPropagation();
+    // O 恒定全屏：即使刚从窗口的经文投影切过来，也必须是全屏版诗歌投影
+    this.openProjection(h || null, true, { resume: true, explicitMode: true });
   }
 
   /* 按 [ 切换「标签页面板」：没开就打开首页，在后台就调回前台，正显示就关闭。
@@ -3914,7 +4535,7 @@ class HymnsView extends ItemView {
   }
 
   /* 预览模式下按 B：在新标签页打开这首诗歌的「白板单页 PDF」。
-     和 P / O 一样，只在焦点确实落在本视图内、且不在输入框里才响应，
+     和 P 一样，只在焦点确实落在本视图内、且不在输入框里才响应，
      避免在笔记或搜索框里打字母 b 时误触发。 */
   onWhiteboardHotkey(e) {
     if (e.defaultPrevented || e.isComposing) return;
@@ -3951,32 +4572,9 @@ class HymnsView extends ItemView {
     await this.shareFilePath(rel, 'application/pdf', hymnLabel(h));
   }
 
-  /* 按 O：打开 / 关闭「全屏投影」，或在两种投影之间切换（桌面端）。
-     没预览时也能用：没预览 → 打开全屏投影提示态（或切换/关闭已有的投影）。
-     文档级捕获监听，焦点不限于本视图；输入框 / 编辑器里打字时不触发。 */
-  onFullscreenHotkey(e) {
-    if (e.defaultPrevented || e.isComposing) return;
-    if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
-    if (e.key !== 'o' && e.key !== 'O') return;
-    if (this.app.isMobile) return;                       // 整屏概念仅桌面端
-    const t = e.target;
-    if (t && t.closest && t.closest('input, textarea, select, [contenteditable="true"]')) return;
-    const proj = this.plugin._projection;
-    if (proj && !proj._closed) {
-      if (proj.el && proj.el.contains(t)) return;         // 焦点就在投影层内 → 交给投影自身处理
-      if (e._hymnsHandled) return;
-      e._hymnsHandled = true;
-      e.preventDefault(); e.stopPropagation();
-      if (proj._fullscreen) proj.close();                 // 整屏投影按 O → 关闭
-      else proj.setFullscreen(true);                      // 窗口投影按 O → 切到整屏
-      return;
-    }
-    if (e._hymnsHandled) return;
-    e._hymnsHandled = true;
-    const h = this.launchTargetHymn();
-    e.preventDefault(); e.stopPropagation();
-    this.openProjection(h || null, true, { resume: true });    // 直接整屏；优先恢复被挤走的那首
-  }
+  /* 已恢复到已提交版：O 是诗歌投影的全屏键、P 是窗口投影键，两者都在视图级
+     _wirePersistentEvents() 注册捕获监听；没有视图时由插件级 onGlobalProjectionHotkey 兜底。
+     D 是经文投影的全屏键，归 BSAR，Hymns 这边始终不消费 D。 */
 
   async onClose() {
     // ⚠️ async onClose 抛错会变成 rejected Promise，leaf.detach() 内部 await 它，
@@ -4802,10 +5400,12 @@ class HymnsView extends ItemView {
     menu.addItem((i) => i.setTitle('查看白板PDF').setIcon('file-text').onClick(() => this.openWhiteboardPdf(h)));
     menu.addSeparator();
     // 投影：唱诗时最常用的动作
-    menu.addItem((i) => i.setTitle('窗口投影').setIcon('presentation').onClick(() => this.openProjection(h)));
+    menu.addItem((i) => i.setTitle('窗口投影').setIcon('presentation')
+      .onClick(() => this.openProjection(h, false, { explicitMode: true })));
     if (!this.app.isMobile) {
       // 桌面端额外提供「全屏投影」：一步进整屏，省去再按 O
-      menu.addItem((i) => i.setTitle('全屏投影').setIcon('maximize').onClick(() => this.openProjection(h, true)));
+      menu.addItem((i) => i.setTitle('全屏投影').setIcon('maximize')
+        .onClick(() => this.openProjection(h, true, { explicitMode: true })));
     }
     menu.addSeparator();
     menu.addItem((i) => i.setTitle('复制 PDF 链接').onClick(() => copyText('[[' + linkBase(h.pdfPath) + ']]')));
@@ -5563,6 +6163,7 @@ class HymnsPlugin extends Plugin {
       playMode: 'sequential',
       // 安装 / 启用插件后自动在右侧边栏生成诗歌面板（已有面板时不重复建）
       autoOpenSidebar: true,
+      recentLimit: RECENT_LIMIT_DEFAULT,  // 「最近打开 / 投影历史」同一份记录，默认 50 首（1–200）
       pdfFollow: false,     // PDF 联动：选中后侧边栏 PDF 随播放变动，默认关闭
       autoCheckUpdate: true, // 每次启动 Obsidian 都自动检测一次更新
       lastVersion: '',       // 上次已记录的版本号，用于判断「是否升级」并弹更新说明
@@ -5571,7 +6172,8 @@ class HymnsPlugin extends Plugin {
     }, data.settings || {});
     this.playlists = data.playlists || [];
     this.removedBuiltinIds = data.removedBuiltinIds || [];
-    this.recent = data.recent || [];
+    // 启动时也按当前上限裁剪一次：改小设置后遗留的旧记录不会一直挂着
+    this.recent = (data.recent || []).slice(0, clampRecentLimit(this.settings.recentLimit));
     this.ensureBuiltinPlaylists();   // 首次加载自动写入内置默认播放列表
     this.hymns = [];
     this.whiteboardIndex = data.whiteboardIndex || {};   // 各分类白板合订本的「编号 → 页码」缓存
@@ -5586,11 +6188,12 @@ class HymnsPlugin extends Plugin {
     this._pdfScroll = {};        // 各诗歌 PDF 的滚动位置（uid → scrollTop），跨视图重建保留
     this._pdfScrollRatio = {};   // 各诗歌 PDF 的滚动比例（uid → scrollTop/scrollHeight），宽度变化后按比例恢复到同一页
 
-    /* 投影联动 / 投影诗歌历史都只存内存，不写 data.json：重启 Obsidian 后自动清空，
-       用户明确不需要保留上次启动的诗歌记录。 */
-    this._projResume = null;       // { hymn, pageNo }：被经文投影请走时记下，下次 O/P 原样恢复
-    this._projHistory = [];        // 本次会话投影里打开过的诗歌（按时间顺序）
-    this._projHistoryIndex = -1;   // 当前在历史里的位置（← 后退 / → 前进）
+    /* 「最近打开」与投影历史是同一份记录，存在 data.json 的 recent 里（持久化）。
+       这里只留恢复点与派生视图：_projHistory 由 syncProjectionHistory() 按 recent
+       的面板顺序解析（最新在前，下标＝面板行号），_projHistoryIndex 是游标。 */
+    this._projResume = null;       // { hymn, pageNo }：被经文投影请走时记下，下次 P 原样恢复
+    this._projHistory = [];        // recent 的诗歌对象视图（与「最近打开」面板同序，最新在前）
+    this._projHistoryIndex = -1;   // 当前在面板里的行号（-1 ＝ 空白首页，还没进入历史）
 
     /* 与 Bible Search and Reader 的投影联动：经文投影存在时按 Q/W/E，对方会派发
        hymns:projection-close，请求诗歌投影自行收起（退出整屏、移除图层、清理键盘监听），
@@ -5600,19 +6203,23 @@ class HymnsPlugin extends Plugin {
       const p = this._projection;
       if (!p || p._closed) return;
       // 被经文投影「请走」而非用户主动关闭：记下此刻真正显示的那首（可能只在投影内
-      // 搜到、侧边栏并没有预览），连页码一起留着，下次 O/P 重开时原样恢复。
+      // 搜到、侧边栏并没有预览），连页码一起留着，下次 P 重开时原样恢复。
       const snapshot = snapshotHymnProjection(p);
+      // 在 close() 之前读：诗歌投影「此刻」是全屏还是窗口，直接决定接管的经文投影
+      // 该全屏还是该窗口（用户要求：诗歌全屏→经文全屏、诗歌窗口→经文窗口）。
+      const wantFs = !!(p._fullscreen ||
+        (typeof p.ownFullscreenElement === 'function' && p.ownFullscreenElement()));
       p._closingForBible = true;      // 让 openProjection 的 onClose 不要把恢复点清掉
       try { p.close(); } catch (err) { /* ignore */ }
       this._projection = null;
       this._projResume = snapshot;    // 放在 close() 之后，确保不会被 onClose 影响
-      if (e && e.detail) e.detail.done = true;
+      if (e && e.detail) { e.detail.done = true; e.detail.wantFs = wantFs; }
     };
     if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
       document.addEventListener('hymns:projection-close', this._onProjCloseRequest);
     }
 
-    /* 开机就能按 O / P / [：视图级快捷键挂在 HymnsView 上，Obsidian 启动若没把 Hymns
+    /* 开机就能按 P / [：视图级快捷键挂在 HymnsView 上，Obsidian 启动若没把 Hymns
        面板摆到侧边栏（视图没被实例化），那些监听根本不存在，必须先点开 Hymns 才能用。
        这里在插件级注册一份兜底；只要存在「已挂监听的 HymnsView」就整体让行，
        语义与视图级一致、不会同一次按键处理两遍（Bible 的 Q/W/E 也是插件级，行为对齐）。 */
@@ -5809,7 +6416,7 @@ class HymnsPlugin extends Plugin {
   }
 
   /* 是否已有「挂好快捷键监听」的 Hymns 视图。
-     视图只有被 Obsidian 实例化并跑过 buildLayout() 才有 _onProjKey / _onFullKey；
+     视图只有被 Obsidian 实例化并跑过 buildLayout() 才有 _onProjKey；
      leaf 被关掉后 getLeavesOfType 不再返回它，onClose() 也已把监听解绑。 */
   hasWiredHymnsView() {
     try {
@@ -5831,8 +6438,10 @@ class HymnsPlugin extends Plugin {
     return false;
   }
 
-  /* 插件级 O / P / [ 兜底（见 onload 注释）。捕获阶段注册，先于视图级监听执行；
-     只有「没有任何已挂监听的 HymnsView」时才真正接管。 */
+  /* 插件级 P / [ 兜底（见 onload 注释）。捕获阶段注册，先于视图级监听执行；
+     只有「没有任何已挂监听的 HymnsView」时才真正接管。
+     D 是经文投影的全屏键，Hymns 这边完全不消费（插件级抢走会坏掉对方的全屏开关）；
+     O 是诗歌投影的全屏键、P 是窗口投影键，两者都在这里兜底。 */
   onGlobalProjectionHotkey(e) {
     if (!e || e.defaultPrevented || e.isComposing || e._hymnsHandled) return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -5858,11 +6467,11 @@ class HymnsPlugin extends Plugin {
     const isP = (k === 'p' || k === 'P');
     const isO = (k === 'o' || k === 'O');
     const isTab = (k === '[');
-    if (!isP && !isO && !isTab) return;
+    if (!isP && !isO && !isTab) return;             // D 归经文投影，Hymns 不接管
     if (!isTab && e.shiftKey) return;               // 与视图级一致；[ 在多数布局需 Shift，放行
     if (isO && this.app.isMobile) return;           // 整屏概念仅桌面端
     const t = e.target;
-    // 投影层内的按键归投影自己的 handleKey（O / P 都在那里处理）
+    // 投影层内的按键归投影自己的 handleKey（P / O 都在那里处理）
     const proj = this._projection;
     if (proj && !proj._closed && proj.el && t && typeof proj.el.contains === 'function' && proj.el.contains(t)) return;
     if (t && t.closest && t.closest('input, textarea, select, [contenteditable="true"]')) return;
@@ -5873,23 +6482,37 @@ class HymnsPlugin extends Plugin {
     this.launchProjectionGlobally(isO ? 'fullscreen' : 'window');
   }
 
-  /* 没有 Hymns 视图时打开 / 切换投影：语义与 HymnsView.onProjectionHotkey /
-     onFullscreenHotkey 完全一致，只是没有侧边栏可以取目标诗歌，因此优先用恢复点，
-     没有恢复点就打开空状态（投影内搜索照样能选歌）。
+  /* 没有 Hymns 视图时打开 / 切换投影：语义与视图级 P / O 的处理一致，
+     只是没有侧边栏可以取目标诗歌，因此优先用恢复点，没有恢复点就打开空状态
+     （投影内搜索照样能选歌）。P 恒定窗口、O 恒定全屏，不继承经文投影的整屏状态。
      view 传 null：HymnProjection 内所有 this.view 引用都有守卫。 */
   launchProjectionGlobally(mode) {
+    const wantFs = (mode === 'fullscreen');
     const proj = this._projection;
     if (proj && !proj._closed) {
-      const wantFs = (mode === 'fullscreen');
-      if (proj._fullscreen === wantFs) proj.close();
-      else proj.setFullscreen(wantFs);
+      if (proj._fullscreen === wantFs) proj.close();       // 同模式 → 关闭（O/P 即开即关）
+      else proj.setFullscreen(wantFs);                     // 异模式 → 在窗口 / 全屏之间切换
       return;
     }
     const resume = this._projResume || null;
     this._projResume = null;                        // 一次性：用过即作废
     const hymn = (resume && resume.hymn) || null;
-    const startFs = (mode === 'fullscreen') && !this.app.isMobile;
-    // 构造 / open 任一环节失败都要把 _projection 清干净，否则之后 O/P 只会去
+    // P / O 显式指定模式：P 一律窗口、O 一律全屏，绝不继承持久意图或经文投影的整屏状态。
+    // 先清残留意图，真正进整屏后由 setFullscreen() 在请求成功时才写回 true。
+    setProjectionFsIntent(false);
+    markProjectionFullscreenHandoff(false);
+    const startFs = !this.app.isMobile && wantFs;
+    if (!startFs) {
+      // 窗口模式：清掉「经文投影层还在整屏」的残留，避免画面看起来仍是全屏
+      try {
+        const d0 = (typeof document !== 'undefined') ? document : null;
+        if (d0 && d0.fullscreenElement && typeof d0.exitFullscreen === 'function') {
+          const q0 = d0.exitFullscreen();
+          if (q0 && typeof q0.catch === 'function') q0.catch(() => { /* ignore */ });
+        }
+      } catch (e) { /* ignore */ }
+    }
+    // 构造 / open 任一环节失败都要把 _projection 清干净，否则之后 O / P 只会去
     // 「切换一个根本没显示出来的投影」，永远打不开；恢复点也还回去供下次重试。
     try {
       const doc = (typeof document !== 'undefined') ? document : null;
@@ -5902,6 +6525,8 @@ class HymnsPlugin extends Plugin {
       };
       this._projection = p;
       p.open();
+      // 插件级兜底入口同样保证 P＝窗口：启动后再幂等退一次浏览器整屏
+      if (!startFs) ensureWindowProjectionNotFullscreen(doc);
     } catch (e) {
       this._projection = null;
       this._projResume = resume;
@@ -7161,9 +7786,46 @@ class HymnsPlugin extends Plugin {
       seen.add(uid);
       out.push(c);
     }
-    this.recent = out.slice(0, 20);
+    // 上限由设置决定（默认 50，1–200）；改小设置时立刻裁剪已有记录。
+    const limit = clampRecentLimit(this.settings && this.settings.recentLimit);
+    this.recent = out.slice(0, limit);
+    this.syncProjectionHistory();
     this.saveAll();
   }
+
+  /* 「最近打开」（recent，持久化在 data.json）就是诗歌投影的历史记录。
+     这里按面板显示顺序解析（最新在前），_projHistory[0] 就是「最近打开」第一行，
+     游标下标与面板行号一一对应：「上一首」+1 沿面板往下看更早打开过的，
+     「下一首」-1 回到面板上方更近期的一首。再把游标对齐到当前投影的那一首。
+     侧边栏预览 / 播放同样走 addRecent()，所以投影里也能翻到那些诗歌。 */
+  syncProjectionHistory() {
+    const out = [];
+    const seen = new Set();
+    try {
+      for (let i = 0; i < (this.recent || []).length; i++) {
+        const h = this.resolveHymn(this.recent[i]);
+        if (!h || !h.pdfPath) continue;      // 没有 PDF 的诗歌投不出来，不进导航
+        const key = h.uid || h.pdfPath;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(h);
+      }
+    } catch (e) { /* 索引尚未就绪：先留空，下次 projectionHistory() 会重建 */ }
+    this._projHistory = out;
+    const p = this._projection;
+    const cur = (p && !p._closed) ? p.hymn : null;
+    const curKey = cur && (cur.uid || cur.pdfPath);
+    let at = -1;
+    if (curKey) {
+      for (let i = 0; i < out.length; i++) {
+        if ((out[i].uid || out[i].pdfPath) === curKey) { at = i; break; }
+      }
+    }
+    // 没找到 / 空白首页保持 -1：第一次按「上一首」才会落在面板第一行
+    this._projHistoryIndex = at;
+    return out;
+  }
+  projectionHistory() { return this.syncProjectionHistory(); }
 
   /* ---- 打开视图 ---- */
   /* 刷新所有已打开的诗歌面板（侧边栏和标签页可能同时开着）。

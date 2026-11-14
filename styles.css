@@ -1063,10 +1063,13 @@ button.hymns-icon-btn.hymns-pl-del:hover { color: var(--text-error); background:
    .hymns-proj 是 fixed + inset:0，子元素全是 absolute，给容器加 padding 并不会
    把它们推开；因此把四边安全区记成变量，逐个作用到贴边控件与舞台本身。 */
 .hymns-proj {
-  --hymns-safe-top: env(safe-area-inset-top, 0px);
-  --hymns-safe-right: env(safe-area-inset-right, 0px);
-  --hymns-safe-bottom: env(safe-area-inset-bottom, 0px);
-  --hymns-safe-left: env(safe-area-inset-left, 0px);
+  /* ⚠️ 安卓 WebView 的 env(safe-area-inset-*) 常返回 0；Obsidian 会把真实状态栏
+     高度注入 --safe-area-inset-*，两者取大者。宿主连变量都不给时，main.js
+     会写 --hymns-android-inset-top 作为最后兜底（挖孔屏 / 全屏沉浸式都需要）。 */
+  --hymns-safe-top: max(env(safe-area-inset-top, 0px), var(--safe-area-inset-top, 0px), var(--hymns-android-inset-top, 0px));
+  --hymns-safe-right: max(env(safe-area-inset-right, 0px), var(--safe-area-inset-right, 0px));
+  --hymns-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--safe-area-inset-bottom, 0px));
+  --hymns-safe-left: max(env(safe-area-inset-left, 0px), var(--safe-area-inset-left, 0px));
   box-sizing: border-box;
   max-height: 100dvh;
 }
@@ -1223,3 +1226,96 @@ button.hymns-icon-btn.hymns-pl-del:hover { color: var(--text-error); background:
 /* 移动端绝不接管原生拖动：即便主题 / 宿主把 app-region 带进来也不允许拖走投影层 */
 body.is-mobile .hymns-proj .hymns-proj-grip,
 body.is-mobile .hymns-proj .hymns-proj-tools { -webkit-app-region: no-drag; }
+
+/* ===== 投影内「最近打开 / 播放列表」浮层面板 =====
+   整屏进入 top layer 后 body 上的 Modal 会被盖住，所以面板挂在投影层里。
+   规格与模式菜单同款（#211d38 / 10px 圆角 / 紫色当前项），只是多一条可滚动列表。 */
+.hymns-proj .hymns-proj-panel {
+  position: absolute;
+  top: calc(var(--hymns-safe-top, 0px) + 60px);
+  right: calc(var(--hymns-safe-right, 0px) + 10px);
+  width: min(320px, calc(100vw - 24px));
+  max-width: calc(100vw - 24px);
+  max-height: min(60vh, 460px);
+  box-sizing: border-box;
+  display: flex; flex-direction: column;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, .16);
+  border-radius: 10px;
+  background: #211d38;
+  color: #f2f0ff;
+  box-shadow: 0 18px 46px rgba(0, 0, 0, .55);
+  z-index: 60;
+  overflow: hidden;
+  -webkit-app-region: no-drag;
+}
+.hymns-proj .hymns-proj-panel *,
+.hymns-proj.is-native-drag .hymns-proj-panel { -webkit-app-region: no-drag; }
+.hymns-proj .hymns-proj-panel-head {
+  display: flex; align-items: center; gap: 8px;
+  flex: 0 0 auto;
+  padding: 10px 10px 10px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, .10);
+}
+.hymns-proj .hymns-proj-panel-title {
+  flex: 1 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 13px; font-weight: 600; color: #fff;
+}
+.hymns-proj button.hymns-proj-panel-close {
+  flex: 0 0 26px; width: 26px; height: 26px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  border: none; border-radius: 6px;
+  background: transparent; color: #cbc6e6; cursor: pointer;
+}
+.hymns-proj button.hymns-proj-panel-close:hover { background: rgba(255, 255, 255, .12); color: #fff; }
+.hymns-proj button.hymns-proj-panel-close svg { width: 15px; height: 15px; }
+.hymns-proj .hymns-proj-panel-body {
+  flex: 1 1 auto; min-height: 0;
+  overflow-y: auto; padding: 6px;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  -webkit-app-region: no-drag;
+}
+.hymns-proj button.hymns-proj-panel-row {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; box-sizing: border-box;
+  margin: 0 0 2px; padding: 9px 10px;
+  border: none; border-radius: 7px;
+  background: transparent; color: #e6e2f7;
+  text-align: left; font-size: 12.5px; line-height: 1.35;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+.hymns-proj button.hymns-proj-panel-row:hover { background: rgba(126, 110, 220, .22); color: #fff; }
+.hymns-proj button.hymns-proj-panel-row.is-current { background: rgba(126, 110, 220, .30); color: #fff; }
+.hymns-proj button.hymns-proj-panel-row.is-cursor {
+  background: rgba(126, 110, 220, .18);
+  box-shadow: inset 0 0 0 1px rgba(203, 169, 255, .75);
+  color: #fff;
+}
+.hymns-proj button.hymns-proj-panel-back { color: #cba9ff; font-size: 12px; }
+.hymns-proj .hymns-proj-panel-row-label {
+  flex: 1 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.hymns-proj .hymns-proj-panel-row-meta { flex: 0 0 auto; font-size: 11px; color: #aaa4c9; }
+.hymns-proj .hymns-proj-panel-empty {
+  padding: 18px 12px; text-align: center;
+  font-size: 12px; line-height: 1.6; color: #aaa4c9;
+}
+.hymns-proj .hymns-proj-panel-foot {
+  flex: 0 0 auto;
+  padding: 8px 12px;
+  border-top: 1px solid rgba(255, 255, 255, .10);
+  font-size: 11px; line-height: 1.5; color: #cba9ff;
+}
+@media (max-width: 480px) {
+  .hymns-proj .hymns-proj-panel {
+    top: calc(var(--hymns-safe-top, 0px) + 54px);
+    right: calc(var(--hymns-safe-right, 0px) + 8px);
+    width: min(300px, calc(100vw - 20px));
+    max-height: min(52vh, 400px);
+  }
+  .hymns-proj button.hymns-proj-panel-row { padding: 8px 9px; font-size: 12px; }
+}
