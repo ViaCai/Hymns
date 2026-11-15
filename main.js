@@ -92,6 +92,40 @@ const CATEGORIES = {
 const CAT_ORDER = ['D', 'B', 'C', 'X', 'E', 'Q', 'T', 'O'];
 // 已知分类字母（用于“其他诗歌”过滤：凡是不在这些字母里的都算其他）
 const KNOWN_LETTERS = new Set(['D', 'B', 'C', 'X', 'E', 'Q', 'T']);
+
+/* ===== 会话级「列表位置记忆」=====
+   只放在插件实例的内存里，绝不写进 data.json：这样重启 Obsidian 之后，
+   诗歌选择界面、历史记录、播放列表都会自然回到默认位置（用户明确要求）。
+   · picker.cat/page = 上次停留的诗歌分类与首数分组（重开界面原样复现）
+   · recent / playlist = 投影面板的滚动位置与键盘光标
+   · sidebar = 侧边栏「最近打开 / 播放列表」的展开状态与滚动位置
+   用函数懒创建，方便老数据 / 测试桩里没有该字段时也能安全退化。 */
+function newListMemory() {
+  return {
+    picker:   { cat: null, page: null, scroll: 0, cursor: -1 },
+    recent:   { valid: false, scroll: 0, cursor: -1 },
+    playlist: { valid: false, name: null, scroll: 0, cursor: -1 },
+    sidebar:  { valid: false, scroll: 0, sectionOpen: {}, playlistOpen: {} },
+  };
+}
+function listMemory(plugin) {
+  if (!plugin) return null;
+  if (!plugin._listMemory) plugin._listMemory = newListMemory();
+  return plugin._listMemory;
+}
+
+/* 诗歌选择界面：把一首诗歌归到侧边栏那 8 个分类之一（O = 其他诗歌）。 */
+function hymnCatKey(h) {
+  const l = String((h && h.letter) || '').toUpperCase();
+  return KNOWN_LETTERS.has(l) ? l : 'O';
+}
+/* 首数分组对应的编号范围：0 → 1–99，1 → 100–199 … S → 附录诗歌。 */
+function pickerPageLabel(key) {
+  if (key === APPENDIX_PAGE) return '附录诗歌';
+  const n = Number(key) * 100;
+  return (n === 0 ? 1 : n) + '–' + (n + 99) + ' 首';
+}
+
 const PLAY_MODES = ['sequential', 'loop', 'one', 'shuffle'];
 const PLAY_MODE_NAME = { sequential: '顺序播放', loop: '顺序循环', one: '单曲循环', shuffle: '随机播放' };
 const PLAY_MODE_ICON = { sequential: 'list-ordered', loop: 'repeat', one: 'repeat-1', shuffle: 'shuffle' };
@@ -131,6 +165,21 @@ const UPDATE_BASE = 'https://raw.githubusercontent.com/' + UPDATE_REPO + '/' + U
 
 // ==================== 更新日志内容（供弹窗离线展示；缺失时回退到远端 CHANGELOG.md）====================
 const CHANGELOG_CONTENT = {
+  '2.7.0': `## [2.7.0] - 2026-11-15
+
+### 本次更新
+- **诗歌选择面板**：投影里长按顶部搜索框（或长按确定键）打开「诗歌选择」——左边选诗歌分类，右边按首数分组（0＝1–99、1＝100–199 …… S＝附录），再点分组看该组诗歌。左栏对齐搜索框左侧；↑ ↓ 选择、→ 确认并投出这一首、← 逐级返回；关掉再开仍停在原处，重启 Obsidian 才回默认。
+- **点选会高亮**：投影播放列表、侧边栏「最近打开」和播放列表里点过的那首，再回来看都会标出来，方便接着看下一首。
+- **回看不打乱顺序**：在「最近打开 / 历史」里点一首只是回看，不会把它顶到最上、也不刷新面板位置；只有在搜索、列表或别处播放它时才会更新顺序与位置。
+
+### 修复
+- **上一首 / 下一首各走各的**：从搜索结果点进的，← → 只在这批搜索结果里翻；从播放列表 / 诗歌选择面板点进的，只在该列表里翻。方向上：历史记录从上往下是上一首，搜索结果、播放列表、诗歌列表从上往下是下一首；左右滑动同样对应「上一首 / 下一首」。
+- 点顶部搜索框会把打开中的诗歌选择面板收起、候选正常弹出；选择面板里按确定键不再误触发。
+
+### 小提示
+- 与经文投影互切建议搭配「Bible Search and Reader」5.2.0 或更新版，两个插件一起更新最省心。
+- 投影里 ↑ ↓ 翻节、← → 换诗歌、空格播放、Esc 退出，都和以前一样。`,
+
   '2.6.0': `## [2.6.0] - 2026-11-14
 
 ### 本次更新
@@ -2033,7 +2082,7 @@ class LyricsModal extends Modal {
 /* ============ 诗歌投影（单页投影：D 切换整屏） ============
    会众唱诗时把诗歌页投到大屏：一个屏幕只放一页 PDF（一页 = 一节）。
    · 上一节 / 下一节：↑ ↓ / PageUp / PageDown、屏幕左右两侧的大按钮（↑ / ↓ 箭头）、鼠标滚轮、下滑 / 上滑
-   · 投影历史：← →、右上角两个按钮、右滑 / 左滑 —— 只在本次会话投影过的诗歌间后退 / 前进，
+   · 投影历史：← →、右上角两个按钮、左滑 / 右滑 —— 只在本次会话投影过的诗歌间后退 / 前进，
                不会按目录列表翻到没看过的诗歌；重启 Obsidian 后历史清空
    · 拖拽手势鼠标与触屏完全一致：左右拖翻投影历史，上下拖翻节
    · 找诗歌：顶部搜索框输入编号 / 歌名 / 歌词，弹出候选，点一条直接换诗歌；
@@ -2291,10 +2340,26 @@ class HymnProjection {
     this._projLastQuery = '';                 // 上一次生成候选的完整搜索词
     this._projPickedUid = null;               // 上一次选中的诗歌（再次点开搜索框时标出）
     this._projSuggestScroll = 0;              // 候选框收起时的滚动位置（再次点开时原样恢复）
+    /* 「上一首 / 下一首」按当前诗歌的来源列表走：
+       search=投影搜索结果、picker=诗歌选择界面的分类分组、playlist=播放列表面板、
+       history=最近打开（回看）、browse=侧边栏正在浏览的列表。
+       没设来源（外部直接构造 / 老入口）时仍沿用原来的投影历史行为。 */
+    this._navSource = null;
+    this._navList = null;
+    this._navIndex = -1;
+    this._pickerLongAt = 0;                   // 长按搜索框打开诗歌选择界面的时间戳（用来吞掉随后的 click/focus）
+    this._enterHoldTimer = null;              // 长按确定键（Enter）开诗歌选择界面的计时器
+    this._enterLongFired = false;             // 确定键长按已经触发过，keyup 别再当作短按聚焦搜索
     this._startFs = !!startFs;                 // 若为 true，open() 末尾直接进入整屏（须由用户手势触发）
     this._resumePageNo = 0;                   // 跨插件切回时恢复的页码（load() 里用一次即清零）
     this._onKeyDown = (e) => this.handleKey(e);
-    this._onResize = () => this.scheduleFit();
+    this._onKeyUp = (e) => this.onKeyUp(e);
+    this._onFocusIn = (e) => this.onProjFocusIn(e);
+    this._onResize = () => {
+      this.scheduleFit();
+      // 工具条换行 / 窗口尺寸变化会挪动搜索框：选择界面开着时跟着重新对齐
+      if (this._panelKind === 'picker' && this.panelEl && this.panelEl.parentNode) this.alignPickerPanel();
+    };
     this._onFsChange = () => this.onFullscreenChange();
     this._onAudio = () => this.syncPlayState();
   }
@@ -2349,14 +2414,48 @@ class HymnProjection {
       cls: 'hymns-proj-search',
       attr: {
         type: 'text', placeholder: '搜索诗歌…（DB/A 选本）',
-        title: '与侧边栏同一套搜索规则：开头 A=全部、D=大本、B/C/X/E/Q/T/O=各本，可连写如「DB恩典」同时搜大本与补充本',
+        title: '与侧边栏同一套搜索规则：开头 A=全部、D=大本、B/C/X/E/Q/T/O=各本，可连写如「DB恩典」同时搜大本与补充本；长按搜索框可打开「诗歌选择」界面（按分类 / 首数选诗）',
         'aria-label': '投影内搜索诗歌', autocomplete: 'off', spellcheck: 'false'
       }
     });
     this.searchEl.addEventListener('input', () => this.onProjSearchInput());
-    // 选中一首后再点搜索框：原样弹回上一次的候选（连滚动位置都不变），并标出上次选中的那首
-    this.searchEl.addEventListener('focus', () => { this.reopenProjSuggestions(); this.wake(); });
-    this.searchEl.addEventListener('click', () => { this.reopenProjSuggestions(); this.wake(); });
+    // 选中一首后再点搜索框：原样弹回上一次的候选（连滚动位置都不变），并标出上次选中的那首。
+    // 长按打开「诗歌选择」后紧随的 focus / click 要吞掉，否则旧候选又弹出来盖住选择界面。
+    const reopenProjSuggest = () => {
+      if (this._pickerLongAt && (Date.now() - this._pickerLongAt) < 1500) return;
+      this.reopenProjSuggestions();
+      this.wake();
+    };
+    this.searchEl.addEventListener('focus', reopenProjSuggest);
+    this.searchEl.addEventListener('click', reopenProjSuggest);
+    /* 长按搜索框约 550ms（桌面按住鼠标 / 触屏按住，移动不超阈值）→ 打开「诗歌选择」界面：
+       左栏选诗歌分类，右栏选首数分组（0/1/2…/S），再点分组看该组诗歌。
+       不另加按钮，避免挤窄顶部工具条；状态记在插件会话内存里，重开界面原样复现。 */
+    let pickLpTimer = null, pickLpStart = null;
+    const cancelPickLp = () => { if (pickLpTimer) { clearTimeout(pickLpTimer); pickLpTimer = null; } };
+    this.searchEl.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      cancelPickLp();
+      pickLpStart = { x: e.clientX, y: e.clientY };
+      pickLpTimer = setTimeout(() => {
+        pickLpTimer = null;
+        if (this._closed) return;
+        this._pickerLongAt = Date.now();
+        try { this.searchEl.blur(); } catch (err) { /* ignore */ }
+        this.collapseProjSuggestions();
+        this.toggleProjectionPanel('picker');
+      }, 550);
+    });
+    this.searchEl.addEventListener('pointerup', cancelPickLp);
+    this.searchEl.addEventListener('pointercancel', cancelPickLp);
+    this.searchEl.addEventListener('pointermove', (e) => {
+      if (pickLpTimer && pickLpStart &&
+          (Math.abs(e.clientX - pickLpStart.x) > 8 || Math.abs(e.clientY - pickLpStart.y) > 8)) cancelPickLp();
+    });
+    // 长按后不许弹出系统文本菜单 / iOS 触摸呼出，避免把选择界面顶掉
+    this.searchEl.addEventListener('contextmenu', (e) => {
+      if (this._pickerLongAt && (Date.now() - this._pickerLongAt) < 1500) e.preventDefault();
+    });
     this.searchClearBtn = this.searchWrap.createEl('button', {
       cls: 'hymns-proj-search-clear',
       attr: { type: 'button', 'aria-label': '清空搜索', title: '清空搜索' }
@@ -2375,10 +2474,10 @@ class HymnProjection {
     // 不会像以前那样只剩关闭按钮单独掉到第二行。
     this.actionsEl = this.toolsEl.createDiv({ cls: 'hymns-proj-actions' });
 
-    this.hymnPrevBtn = this.actionsEl.createEl('button', { cls: 'hymns-proj-btn hymns-proj-hymn-btn', attr: { 'aria-label': '上一首', title: '上一首（← / 右滑）' } });
+    this.hymnPrevBtn = this.actionsEl.createEl('button', { cls: 'hymns-proj-btn hymns-proj-hymn-btn', attr: { 'aria-label': '上一首', title: '上一首（← / 左滑）' } });
     setIcon(this.hymnPrevBtn, 'skip-back');
     this.hymnPrevBtn.addEventListener('click', () => this.switchHymn(1));
-    this.hymnNextBtn = this.actionsEl.createEl('button', { cls: 'hymns-proj-btn hymns-proj-hymn-btn', attr: { 'aria-label': '下一首', title: '下一首（→ / 左滑）' } });
+    this.hymnNextBtn = this.actionsEl.createEl('button', { cls: 'hymns-proj-btn hymns-proj-hymn-btn', attr: { 'aria-label': '下一首', title: '下一首（→ / 右滑）' } });
     setIcon(this.hymnNextBtn, 'skip-forward');
     this.hymnNextBtn.addEventListener('click', () => this.switchHymn(-1));
     this.playBtn = this.actionsEl.createEl('button', { cls: 'hymns-proj-btn', attr: { 'aria-label': '播放（空格）', title: '播放（空格）' } });
@@ -2428,7 +2527,7 @@ class HymnProjection {
     // 底部信息条：诗歌名 / 操作提示 / 页码
     this.barEl = el.createDiv({ cls: 'hymns-proj-bar' });
     this.titleEl = this.barEl.createSpan({ cls: 'hymns-proj-title', text: this.hymn ? hymnLabel(this.hymn) : '诗歌投影' });
-    const hint = '↑ ↓ 翻节 · ← 上一首 · → 下一首 · 左右拖/滑 换诗歌 · 上下拖/滑 翻节 · 滚轮 翻节 · Enter 搜索换诗歌 · 空格 播放' + (this.isDesktop ? ' · O 全屏' : '') + ' · P / Esc 退出';
+    const hint = '↑ ↓ 翻节 · ← 上一首 · → 下一首 · 左右拖/滑 换诗歌（左滑上一首 · 右滑下一首） · 上下拖/滑 翻节 · 滚轮 翻节 · Enter 搜索换诗歌 · 空格 播放' + (this.isDesktop ? ' · O 全屏' : '') + ' · P / Esc 退出';
     this.barEl.createSpan({ cls: 'hymns-proj-hint', text: hint });
     this.pageEl = this.barEl.createSpan({ cls: 'hymns-proj-page', text: '' });
 
@@ -2446,6 +2545,8 @@ class HymnProjection {
     // 安卓状态栏兜底必须在挂载后调用（要读宿主的 computed 变量）
     applyHymnsSafeAreaFallback(el, '--hymns-android-inset-top');
     d.addEventListener('keydown', this._onKeyDown, true);
+    d.addEventListener('keyup', this._onKeyUp, true);
+    d.addEventListener('focusin', this._onFocusIn, true);
     this.win.addEventListener('resize', this._onResize);
     d.addEventListener('fullscreenchange', this._onFsChange);
     this.bindAudio();
@@ -2454,11 +2555,14 @@ class HymnProjection {
     // 空白首页没有「当前这一首」：先把历史视图从 recent 建好，再把游标放到 -1。
     // 这样第一次按「上一首」就落在「最近打开」第一行（最近打开的那首），
     // 再按依次第二、第三行；「下一首」则往面板上方回退。
+    // 刚打开投影、还没在投影里选过歌时，← → 仍按「最近打开」逐首走（与已发布行为一致）；
+    // 等用户在投影内搜索 / 诗歌选择界面 / 播放列表面板里点了一首，来源才切成那一份列表。
     if (!this.hymn) {
       const pl0 = this.plugin;
       if (pl0 && typeof pl0.projectionHistory === 'function') pl0.projectionHistory();
       if (pl0) pl0._projHistoryIndex = -1;
     }
+    this.setNavSource('history', null, -1);
     this.updateChrome();
     this.syncPlayState();
     try { el.focus({ preventScroll: true }); } catch (e) { /* ignore */ }
@@ -2659,6 +2763,56 @@ class HymnProjection {
     return { list, i };
   }
 
+  /* 「上一首 / 下一首」按当前诗歌的来源列表走：搜索结果 / 诗歌选择界面 /
+     播放列表 / 最近打开（回看） / 侧边栏正在浏览的列表。点哪里的诗歌就按哪里翻。
+     历史来源直接复用插件的投影历史视图，保持与「最近打开」面板同序。 */
+  setNavSource(source, list, index) {
+    this._navSource = source || null;
+    this._navList = (source === 'history') ? null : ((list || []).slice());
+    this._navIndex = Number.isFinite(index) ? index : -1;
+  }
+  navList() {
+    if (this._navSource === 'history') return (this.plugin && this.plugin._projHistory) || [];
+    return this._navList || [];
+  }
+  navIndex() {
+    if (this._navSource === 'history') return Number(this.plugin && this.plugin._projHistoryIndex);
+    return Number(this._navIndex);
+  }
+  setNavIndex(i) {
+    if (this._navSource === 'history') {
+      if (this.plugin) this.plugin._projHistoryIndex = i;
+    } else this._navIndex = i;
+  }
+  /* 在来源列表里逐首切换。dir 是按钮语义：+1＝上一首、-1＝下一首。
+     列表顺序按用户口径分两类：
+     · 历史记录（最近打开）：从上往下＝越早看过，所以「上一首」沿列表往下；
+     · 搜索结果 / 诗歌列表 / 播放列表：从上往下＝越靠后的诗歌，所以「下一首」沿列表往下。
+     两端只提示、不循环；导航本身不写回 recent，避免把当前歌又顶成第一首。 */
+  switchHymnInSource(dir) {
+    const list = this.navList();
+    if (!list.length) { new Notice('没有可切换的诗歌'); return; }
+    let at = this.navIndex();
+    const curKey = this.hymn && (this.hymn.uid || this.hymn.pdfPath);
+    const ok = Number.isFinite(at) && Math.floor(at) === at && at >= -1 && at < list.length &&
+      (at < 0 || (list[at] && (list[at].uid || list[at].pdfPath) === curKey));
+    if (!ok) {
+      at = curKey ? list.findIndex((x) => x && (x.uid || x.pdfPath) === curKey) : -1;
+      if (at < 0) at = 0;
+      this.setNavIndex(at);
+    }
+    // 历史沿列表往下＝上一首；其余来源沿列表往下＝下一首
+    const step = (this._navSource === 'history') ? dir : -dir;
+    const next = at + step;
+    // 提示按「列表位置」说：越过列表顶端＝第一首、越过末端＝最后一首（与方向映射无关）
+    if (next < 0) { new Notice('已经是第一首'); return; }
+    if (next >= list.length) { new Notice('已经是最后一首'); return; }
+    const h = list[next];
+    if (!h || !h.pdfPath) { new Notice(step > 0 ? '已经是最后一首' : '已经是第一首'); return; }
+    this.setNavIndex(next);
+    this.setHymn(h, -1, true);
+  }
+
   /* 投影里打开过的诗歌直接写进「最近打开」（与侧边栏同一份记录、持久化）。
      addRecent 负责去重、按设置裁剪、同步投影历史视图；这一首随即成为最新一条。 */
   recordProjHymn(h) {
@@ -2666,6 +2820,9 @@ class HymnProjection {
     if (!pl || !h) return;
     const key = h.uid || h.pdfPath;
     if (!key) return;
+    // 从搜索 / 列表等别处选了歌 → 历史顺序变了，之前回看的位置不再保留
+    const mem = listMemory(pl);
+    if (mem) mem.recent.valid = false;
     try { pl.addRecent(h); } catch (e) { /* 记账失败不影响投影 */ }
     // 刚记下的这一首就是「最近打开」第一行，游标对齐面板行号 0
     pl._projHistoryIndex = 0;
@@ -2678,6 +2835,9 @@ class HymnProjection {
      到两端只给提示，绝不循环；导航本身不写回 recent，避免把当前歌顶成第一首。 */
   switchHymn(dir) {
     if (this._closed || dir === 0) return;
+    // 设了来源（搜索结果 / 诗歌列表 / 播放列表 / 历史回看）就按那份列表翻；
+    // 没设来源的外部入口仍沿用下面这套「最近打开」面板行号逻辑。
+    if (this._navSource) return this.switchHymnInSource(dir);
     const pl = this.plugin;
     // 优先用已缓存的历史视图，避免每次都重建并重设游标（重建会把游标拉回当前歌曲，
     // 一旦当前歌曲不在 recent 里就会从末尾跳起，表现成「某些歌切不到」）。
@@ -2773,6 +2933,18 @@ class HymnProjection {
     // 「上一首」沿面板往下走（dir=+1），空白首页 at=-1 时可用；
     // 「下一首」回到面板上方（dir=-1），at<=0 时置灰。
     const pl = this.plugin;
+    // 有来源列表时按来源列表的长度与当前位置置灰（与 switchHymnInSource 同源）
+    if (this._navSource) {
+      const nav = this.navList();
+      let at = this.navIndex();
+      if (!(at >= -1 && at < nav.length) || Math.floor(at) !== at) at = this.hymn ? 0 : -1;
+      // 历史：上一首往下（未到末行可点）、下一首往上（不在首行可点）；
+      // 其它来源相反：上一首往上、下一首往下。
+      const hist = this._navSource === 'history';
+      if (this.hymnPrevBtn) this.hymnPrevBtn.disabled = !(nav.length > 0 && (hist ? at < nav.length - 1 : at > 0));
+      if (this.hymnNextBtn) this.hymnNextBtn.disabled = !(nav.length > 0 && (hist ? at > 0 : at < nav.length - 1));
+      return;
+    }
     // 必须和 switchHymn 共用同一份缓存与同一个游标：projectionHistory() 会重新解析
     // recent 并把 _projHistoryIndex 拉回「当前歌曲」，历史导航走到一半时重建会让
     // 某些歌曲永远切不到 / 边界按钮错误亮起。缓存为空（索引未就绪）才允许重建一次。
@@ -2976,6 +3148,7 @@ class HymnProjection {
     if (!h || this._closed) return;
     const list = this._projResults || [];
     const i = list.findIndex((x) => x && x.uid === h.uid);
+    this.setNavSource('search', list, i);      // 之后 ← → 只在这批搜索结果里换诗歌
     this._projPickedUid = h.uid;                 // 再次点搜索框时标出这一首
     this.collapseProjSuggestions();              // 只收起，DOM 与滚动位置留着复现；搜索词也留着
     this.setHymn(h, i);                          // i<0 时不会误写侧边栏的 viewIndex
@@ -3002,9 +3175,12 @@ class HymnProjection {
     // 选完诗歌 / 失焦后恢复 3 秒淡出，投屏时顶部不会一直挂着搜索框。
     const searching = this.searchEl && (this.docEl.activeElement === this.searchEl ||
       (this.suggestEl && this.suggestEl.style.display !== 'none'));
+    // 历史 / 播放列表 / 诗歌选择面板开着时也常驻：否则工具条淡出后按钮没了，
+    // 用户没法再点按钮收面板或换列表。
+    const panelOpen = !!(this.panelEl && this.panelEl.parentNode);
     // 空状态（还没有投影内容）时工具条常驻：提示里让用户「在上方搜索框输入」，
     // 若 3 秒后搜索框自动淡出，用户会看不到入口。选到诗歌后恢复正常淡出。
-    if (searching || !this.hymn) {
+    if (searching || panelOpen || !this.hymn) {
       this._idleTimer = null;
       return;
     }
@@ -3014,7 +3190,7 @@ class HymnProjection {
   }
 
   /* ---- 拖拽手势：鼠标与触屏四向完全一致 ----
-     左滑 / 左拖 = 下一首，右滑 / 右拖 = 上一首；下滑 / 下拖 = 上一节，上滑 / 上拖 = 下一节。
+     左滑 / 左拖 = 上一首，右滑 / 右拖 = 下一首；下滑 / 下拖 = 上一节，上滑 / 上拖 = 下一节。
      投影层本身 touch-action: none，竖滑不会被浏览器当成滚动 / 下拉刷新。 */
   bindSwipe() {
     let start = null;
@@ -3029,7 +3205,7 @@ class HymnProjection {
       const ax = Math.abs(dx), ay = Math.abs(dy);
       if (Math.max(ax, ay) < 50) return;
       this.wake();
-      if (ax > ay) this.switchHymn(dx < 0 ? -1 : 1);  // 左滑：下一首 / 右滑：上一首
+      if (ax > ay) this.switchHymn(dx < 0 ? 1 : -1);  // 左滑：上一首 / 右滑：下一首
       else this.step(dy > 0 ? -1 : 1);                // 下：上一节 / 上：下一节
     });
     this.stageEl.addEventListener('pointercancel', () => { start = null; });
@@ -3067,6 +3243,32 @@ class HymnProjection {
     if (this._closed || !this.searchEl) return;
     try { this.searchEl.focus({ preventScroll: true }); } catch (e) { /* ignore */ }
     try { this.wake(); } catch (e) { /* ignore */ }
+  }
+
+  /* 长按确定键（Enter）≈ 长按搜索框：打开「诗歌选择」界面。
+     keydown 先启动计时；keyup 在计时未到时兑现「短按聚焦搜索框」的原行为。
+     不另加全局监听：keyup 与 keydown 一样挂在投影的 document 捕获阶段。 */
+  armEnterHold() {
+    if (this._closed || this._enterHoldTimer) return;
+    this._enterLongFired = false;
+    this._enterHoldTimer = setTimeout(() => {
+      this._enterHoldTimer = null;
+      if (this._closed) return;
+      this._enterLongFired = true;
+      this._pickerLongAt = Date.now();           // 吞掉随后可能落在搜索框上的 focus / click
+      try { if (this.searchEl) this.searchEl.blur(); } catch (e) { /* ignore */ }
+      this.collapseProjSuggestions();
+      this.toggleProjectionPanel('picker');
+    }, 550);
+  }
+  onKeyUp(e) {
+    if (!e || e.key !== 'Enter' || this._closed) return;
+    if (this._enterHoldTimer) {
+      clearTimeout(this._enterHoldTimer);
+      this._enterHoldTimer = null;
+      if (!this._enterLongFired) this.focusProjSearch();   // 短按：原来的聚焦搜索框
+    }
+    this._enterLongFired = false;
   }
 
   /* 左上角模式名：恢复到已提交版 —— 诗歌全屏(O) / 诗歌窗口(P)，与模式菜单两项一致。
@@ -3173,7 +3375,60 @@ class HymnProjection {
      整屏进入 top layer 后挂在 body 上的 Modal / Notice 会被整块盖住，所以两个入口
      都展开成投影层自己的浮层（与模式菜单同一套做法）。播放列表是两级：
      先选列表（含「当前播放列表（实时）」），再看其中的诗歌，点一首才投影。 */
+  /* 收起面板前记下这一刻看到的位置，下次打开原样复现。
+     只存会话内存：重启 Obsidian 后 newListMemory() 会全部回默认。 */
+  saveProjectionPanelState() {
+    if (!this.panelEl || !this._panelKind) return;
+    const mem = listMemory(this.plugin);
+    if (!mem) return;
+    let scroll = 0;
+    try { scroll = this.panelBody ? (this.panelBody.scrollTop || 0) : 0; } catch (e) { /* ignore */ }
+    const cursor = Number.isFinite(this._panelCursor) ? this._panelCursor : -1;
+    if (this._panelKind === 'picker') {
+      // 诗歌选择界面滚动的是右栏，不是整个 panelBody
+      const side = this.panelEl.querySelector
+        ? this.panelEl.querySelector('.hymns-proj-picker-side') : null;
+      const sc = side ? (side.scrollTop || 0) : scroll;
+      mem.picker.scroll = sc;
+      mem.picker.cursor = cursor;
+    } else if (this._panelKind === 'recent') {
+      mem.recent.scroll = scroll; mem.recent.cursor = cursor; mem.recent.valid = true;
+    } else if (this._panelKind === 'playlist') {
+      mem.playlist.scroll = scroll; mem.playlist.cursor = cursor; mem.playlist.valid = true;
+    }
+  }
+  /* 恢复面板滚动与键盘光标；cursor 越界时自动夹到末行。 */
+  restorePanelScroll(mem) {
+    if (!mem || !this.panelBody) return;
+    const body = this.panelBody;
+    const top = mem.scroll || 0;
+    try { body.scrollTop = top; } catch (e) { /* ignore */ }
+    // 真实浏览器里内容刚重建时布局可能晚一帧：下一帧再补一次，确保不跳回顶部
+    try {
+      const raf = this.win && this.win.requestAnimationFrame;
+      if (typeof raf === 'function') raf(() => { try { body.scrollTop = top; } catch (e) { /* ignore */ } });
+    } catch (e) { /* ignore */ }
+    const rows = this._panelRows || [];
+    if (rows.length && mem.cursor >= 0) this.setPanelCursor(Math.min(mem.cursor, rows.length - 1));
+  }
+  restorePickerScroll(st) {
+    if (!st || !this.panelEl) return;
+    const side = this.panelEl.querySelector
+      ? this.panelEl.querySelector('.hymns-proj-picker-side') : null;
+    const top = st.scroll || 0;
+    if (side) {
+      try { side.scrollTop = top; } catch (e) { /* ignore */ }
+      try {
+        const raf = this.win && this.win.requestAnimationFrame;
+        if (typeof raf === 'function') raf(() => { try { side.scrollTop = top; } catch (e) { /* ignore */ } });
+      } catch (e) { /* ignore */ }
+    }
+    const rows = this._panelRows || [];
+    if (rows.length && st.cursor >= 0) this.setPanelCursor(Math.min(st.cursor, rows.length - 1));
+  }
+
   closeProjectionPanel() {
+    this.saveProjectionPanelState();
     try { if (this.panelEl && this.panelEl.parentNode) this.panelEl.remove(); } catch (e) { /* ignore */ }
     this.panelEl = null;
     this._panelKind = null;
@@ -3244,16 +3499,88 @@ class HymnProjection {
     const prev = this._panelCursor;
     this.setPanelCursor(prev < 0 ? (dir > 0 ? 0 : rows.length - 1) : prev + dir);
   }
+  /* 诗歌选择界面：↑ ↓ 只在「当前活动栏」里移动。
+     左栏分类 / 右栏（首数分组或诗歌列表）各有自己的光标区间，互不串栏。
+     _panelRows 的顺序是先左栏分类、再右栏内容，故用 _pickerCatCount 分段。 */
+  movePickerCursor(dir) {
+    const rows = this._panelRows || [];
+    if (!rows.length) return;
+    const st = this.pickerState();
+    const catCount = this._pickerCatCount || 0;
+    const inCats = !st.cat;                       // 还没选分类 → 活动栏是左栏
+    let lo = inCats ? 0 : catCount;
+    let hi = inCats ? catCount - 1 : rows.length - 1;
+    if (lo > hi) { lo = 0; hi = rows.length - 1; } // 兜底：分类数为 0 时退化为整表
+    let cur = this._panelCursor;
+    if (cur < lo || cur > hi) cur = dir > 0 ? lo - 1 : hi + 1;
+    this.setPanelCursor(Math.max(lo, Math.min(hi, cur + dir)));
+  }
+  /* 诗歌选择界面每一级重绘后，光标默认落在「当前可操作栏」的第一项：
+     没选分类=左栏第一本；选了分类=右栏第一个分组；进了诗歌列表=第一首诗歌
+     （跳过「← 返回」行，这样按 → 直接投影第一首）。
+     这样按 → 进入下一步时首项立刻带选择框，不必再按一次上下键；
+     已经有有效光标（含重开时恢复的位置）则原样保留。 */
+  ensurePickerCursor() {
+    const rows = this._panelRows || [];
+    if (!rows.length) return;
+    if (this._panelCursor >= 0 && this._panelCursor < rows.length) return;
+    const st = this.pickerState();
+    const catCount = this._pickerCatCount || 0;
+    if (!st.cat || this._panelKind !== 'picker') { this.setPanelCursor(0); return; }
+    let idx = Math.min(catCount, rows.length - 1);
+    const first = rows[idx];
+    if (first && first.classList && typeof first.classList.contains === 'function' &&
+        first.classList.contains('hymns-proj-panel-back')) {
+      idx = Math.min(idx + 1, rows.length - 1);
+    }
+    this.setPanelCursor(idx);
+  }
+  /* 诗歌选择界面 ← ：诗歌列表 → 首数分组 → 诗歌分类 → 收起界面。 */
+  pickerGoBack() {
+    const st = this.pickerState();
+    if (st.page != null) {
+      st.page = null; st.scroll = 0; st.cursor = -1;
+      this.renderPickerPanel(false);
+    } else if (st.cat != null) {
+      st.cat = null; st.page = null; st.scroll = 0; st.cursor = -1;
+      this.renderPickerPanel(false);
+    } else {
+      this.closeProjectionPanel();
+    }
+  }
   activatePanelCursor() {
     const rows = this._panelRows || [];
-    // 没按过 ↑ ↓ 时，Enter 默认落在第一行，免得用户以为按键没反应
-    const idx = this._panelCursor >= 0 ? this._panelCursor : 0;
+    // 没按过 ↑ ↓ 时默认落在第一行；诗歌选择界面则落在「当前活动栏」第一行，
+    // 否则光标为 -1 时会误触发左栏第一个分类（用户其实正在右栏选诗歌）。
+    let idx = this._panelCursor;
+    if (idx < 0) {
+      if (this._panelKind === 'picker') {
+        const st = this.pickerState();
+        idx = st.cat ? (this._pickerCatCount || 0) : 0;
+      } else idx = 0;
+    }
     const row = rows[idx];
     if (!row || typeof row.click !== 'function') return;
     row.click();
     // 选歌后面板会关闭；此时把焦点移出已移除的历史行，否则下一次 Enter 仍落在面板里。
     const panelClosed = !this.panelEl || !this.panelEl.parentNode;
     if (panelClosed) this.focusProjectionAfterPanelPick();
+  }
+
+  /* 焦点离开「诗歌选择」界面就收起它：例如点了顶部搜索框准备改搜别的诗。
+     长按打开时松手那一下 focus 会落在搜索框上，用 _pickerLongAt 的宽限期吞掉，
+     免得界面刚打开就被自己关掉；焦点仍在面板内（各级按钮）时不关。 */
+  onProjFocusIn(e) {
+    if (this._closed || this._panelKind !== 'picker' || !this.panelEl || !this.panelEl.parentNode) return;
+    if (this._pickerLongAt && (Date.now() - this._pickerLongAt) < 800) return;
+    const t = e && e.target;
+    if (!t || t === this.docEl.body || t === this.docEl.documentElement) return;
+    if (this.panelEl.contains && this.panelEl.contains(t)) return;
+    // 只认真正可交互的控件（搜索框 / 工具条按钮等）。换级重绘时旧行被移除、
+    // 焦点会落回 body，那种 focusin 不能把界面关掉。
+    const tag = t.tagName ? String(t.tagName).toUpperCase() : '';
+    if (tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'BUTTON' && tag !== 'SELECT' && tag !== 'A') return;
+    this.closeProjectionPanel();
   }
 
   /* Enter / 鼠标选歌后收起面板时，把焦点交还投影层本身。
@@ -3274,6 +3601,29 @@ class HymnProjection {
     this.panelText(el, text);
   }
 
+  /* 诗歌选择界面打开时左边缘对齐搜索框左边缘。
+     宽窄屏、单行 / 两行工具条、整屏与否都会改变搜索框位置，所以按实际布局量一次；
+     没有布局能力的测试桩（getBoundingClientRect 全 0）就退回 CSS 的右对齐，不抛错。 */
+  alignPickerPanel() {
+    const panel = this.panelEl;
+    if (!panel || !panel.style || this._panelKind !== 'picker') return;
+    panel.style.right = 'auto';
+    try {
+      const el = this.el, search = this.searchWrap;
+      if (!el || !search || typeof el.getBoundingClientRect !== 'function' ||
+          typeof search.getBoundingClientRect !== 'function') return;
+      const er = el.getBoundingClientRect(), sr = search.getBoundingClientRect();
+      if (!sr || !isFinite(sr.left) || !er || !isFinite(er.left)) return;
+      // 绝对定位的 left 相对容器内边距起点：容器若有边框要补上 clientLeft
+      let left = Math.round(sr.left - er.left - (el.clientLeft || 0));
+      const cw = el.clientWidth || er.width || 0;
+      const pw = panel.offsetWidth || 0;
+      const max = Math.max(0, cw - pw - 8);
+      left = Math.max(0, Math.min(max, left));
+      panel.style.left = left + 'px';
+    } catch (e) { /* ignore：布局拿不到就保持 CSS 默认右对齐 */ }
+  }
+
   toggleProjectionPanel(kind) {
     if (!this.el || this._closed) return null;
     // 再点同一个按钮＝收起
@@ -3283,8 +3633,10 @@ class HymnProjection {
     }
     this.closeProjectionPanel();
     this._panelKind = kind;
-    const panel = this.el.createEl('div', { cls: 'hymns-proj-panel' });
+    const panel = this.el.createEl('div', { cls: 'hymns-proj-panel' + (kind === 'picker' ? ' is-picker' : '') });
     this.panelEl = panel;
+    // 诗歌选择界面的左边缘对齐顶部搜索框左边缘（其它面板仍靠右，不打扰既有布局）
+    if (kind === 'picker') this.alignPickerPanel();
     try { panel.addEventListener('click', (ev) => ev.stopPropagation()); } catch (e) { /* ignore */ }
     const head = panel.createEl('div', { cls: 'hymns-proj-panel-head' });
     this.panelTitle = head.createEl('span', { cls: 'hymns-proj-panel-title' });
@@ -3296,8 +3648,11 @@ class HymnProjection {
     close.addEventListener('click', (e) => { e.stopPropagation(); this.closeProjectionPanel(); });
     this.panelBody = panel.createEl('div', { cls: 'hymns-proj-panel-body' });
     this.panelFoot = panel.createEl('div', { cls: 'hymns-proj-panel-foot' });
-    if (kind === 'recent') this.renderRecentPanel();
-    else this.renderPlaylistPanel(null);
+    const mem = listMemory(this.plugin);
+    // 播放列表面板恢复到上次停留的那一级（列表总览或某张歌单里的诗歌）
+    if (kind === 'picker') this.renderPickerPanel(true);
+    else if (kind === 'recent') this.renderRecentPanel();
+    else this.renderPlaylistPanel(mem && mem.playlist.valid ? mem.playlist.name : null, true);
     // 点面板以外的地方收起（延后一拍，避免本次 click 立刻把自己关掉）
     setTimeout(() => {
       // 面板可能在延时期间已被收起 / 投影已关闭：别再挂一个多余的 document 监听
@@ -3309,6 +3664,16 @@ class HymnProjection {
         const t = ev && ev.target;
         if (t && this.panelEl.contains(t)) return;
         if (t && t.closest && t.closest('.hymns-proj-panel-btn')) return;
+        // 长按搜索框刚打开「诗歌选择」时，pointerup 后紧随的 click 会落在搜索框上，
+        // 别让这个监听把刚打开的界面立刻收掉（宽限期内保留）；宽限期外再点搜索框
+        // 就是「焦点离开选择界面」，应当收起它，好让搜索候选项露出来。
+        if (t && this.searchWrap && this.searchWrap.contains(t)) {
+          if (this._panelKind === 'picker' &&
+              !(this._pickerLongAt && (Date.now() - this._pickerLongAt) < 800)) {
+            this.closeProjectionPanel();
+          }
+          return;
+        }
         this.closeProjectionPanel();
       };
       this._panelDocClick = onDoc;
@@ -3318,38 +3683,55 @@ class HymnProjection {
     return panel;
   }
 
-  /* 第一级面板：最近打开（＝投影历史，同一份记录，最新在上） */
+  /* 第一级面板：最近打开（＝投影历史，同一份记录，最新在上）。
+     这里点诗是「回看」：不写 addRecent、不改历史次序；关面板时把滚动 / 光标位置留住，
+     再点「历史记录」还停在原处，方便接着往下看下一首。 */
   renderRecentPanel() {
     if (!this.panelBody) return;
     this.panelClear();
     const pl = this.plugin;
     const limit = clampRecentLimit(pl && pl.settings && pl.settings.recentLimit);
     const codes = ((pl && pl.recent) || []).slice(0, limit);
-    this.panelText(this.panelTitle, '🕘 最近打开（' + codes.length + ' 首）');
-    const curKey = this.hymn && (this.hymn.uid || this.hymn.pdfPath);
-    let shown = 0;
+    const hits = [];
+    const seen = new Set();
     for (let i = 0; i < codes.length; i++) {
       let h = null;
       try { h = pl && pl.resolveHymn ? pl.resolveHymn(codes[i]) : null; } catch (e) { /* ignore */ }
       if (!h || !h.pdfPath) continue;
-      shown++;
+      const key = h.uid || h.pdfPath;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      hits.push(h);
+    }
+    this.panelText(this.panelTitle, '🕘 最近打开（' + hits.length + ' 首）');
+    const curKey = this.hymn && (this.hymn.uid || this.hymn.pdfPath);
+    hits.forEach((h, i) => {
       const isCurrent = !!curKey && (h.uid || h.pdfPath) === curKey;
       this.addPanelRow(hymnLabel(h), isCurrent ? '正在投影' : '', isCurrent, () => {
-        this.setHymn(h);
+        this.saveProjectionPanelState();          // 留住这一刻的位置
+        this.setNavSource('history', null, -1);   // ← → 继续按这份历史顺序翻
+        if (pl) pl._projHistoryIndex = i;
+        this.setHymn(h, -1, true);                // 回看：绝不 addRecent，不改次序
         this.closeProjectionPanel();
         this.focusProjectionAfterPanelPick();
         try { this.wake(); } catch (e) { /* ignore */ }
       });
-    }
-    if (!shown) this.panelEmpty('还没有最近打开的诗歌，投影内搜索或侧边栏预览后会记在这里。');
-    this.panelText(this.panelFoot, '点一首即投影 · 最多保留 ' + limit + ' 首（设置里可改） · ↑ ↓ 选择 · Enter 确定 · Esc 收起');
+    });
+    if (!hits.length) this.panelEmpty('还没有最近打开的诗歌，投影内搜索或侧边栏预览后会记在这里。');
+    this.panelText(this.panelFoot, '点一首即回看（不改变历史次序）· 最多保留 ' + limit + ' 首 · ↑ ↓ 选择 · Enter 确定 · Esc 收起');
+    const mem = listMemory(this.plugin);
+    if (mem && mem.recent.valid) this.restorePanelScroll(mem.recent);
   }
 
-  /* 第二级面板：播放列表。name 为空＝列出所有列表；否则列出该列表里的诗歌。 */
-  renderPlaylistPanel(name) {
+  /* 第二级面板：播放列表。name 为空＝列出所有列表；否则列出该列表里的诗歌。
+     restore=true 只在「重新打开面板」时为真：恢复到上次停留的那一级和那个滚动位置；
+     面板内部点进 / 返回时不恢复，免得把上一级的位置错套到这一级。 */
+  renderPlaylistPanel(name, restore) {
     if (!this.panelBody) return;
     this.panelClear();
     const pl = this.plugin;
+    const mem = listMemory(this.plugin);
+    if (mem) { mem.playlist.name = name || null; mem.playlist.valid = true; }
     const lists = (pl && pl.playlists) || [];
     const curCodes = (pl && pl.currentSequence) || [];
     if (!name) {
@@ -3363,7 +3745,8 @@ class HymnProjection {
         this.addPanelRow(label, count, false, () => this.renderPlaylistPanel(item.name));
       }
       if (!lists.length && !curCodes.length) this.panelEmpty('还没有播放列表，可在侧边栏里新建。');
-      this.panelText(this.panelFoot, '先选一张列表，再点其中的诗歌投影 · ↑ ↓ 选择 · Enter 确定 · Esc 收起');
+      this.panelText(this.panelFoot, '先选一张列表，再点其中的诗歌投影 · 重开面板停在原处 · ↑ ↓ 选择 · Enter 确定 · Esc 收起');
+      if (restore && mem) this.restorePanelScroll(mem.playlist);
       return;
     }
     const isCur = name === CUR_PLAYLIST;
@@ -3371,21 +3754,148 @@ class HymnProjection {
       : ((lists.find((x) => x.name === name) || { codes: [] }).codes || []).slice();
     this.panelText(this.panelTitle, (isCur ? '当前播放列表（实时）' : name) + '（' + codes.length + ' 首）');
     this.addPanelRow('← 返回播放列表', '', false, () => this.renderPlaylistPanel(null), 'hymns-proj-panel-back');
-    let shown = 0;
+    const hits = [];
+    const seen = new Set();
     for (let i = 0; i < codes.length; i++) {
       let h = null;
       try { h = pl && pl.resolveHymn ? pl.resolveHymn(codes[i]) : null; } catch (e) { /* ignore */ }
       if (!h || !h.pdfPath) continue;
-      shown++;
-      this.addPanelRow(hymnLabel(h), String(i + 1), false, () => {
-        this.setHymn(h);
+      const key = h.uid || h.pdfPath;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      hits.push(h);
+    }
+    const curKey = this.hymn && (this.hymn.uid || this.hymn.pdfPath);
+    hits.forEach((h, i) => {
+      // 标出当前正在投影的这一首（刚从这张列表点进来的就是它），重开面板一眼能认出
+      const isCurrent = !!curKey && (h.uid || h.pdfPath) === curKey;
+      this.addPanelRow(hymnLabel(h), String(i + 1), isCurrent, () => {
+        this.saveProjectionPanelState();          // 留住列表里看到的位置
+        this.setNavSource('playlist', hits, i);   // ← → 只在这张列表里翻
+        this.setHymn(h, -1);                      // 从列表里选歌 → 计入最近打开
         this.closeProjectionPanel();
         this.focusProjectionAfterPanelPick();
         try { this.wake(); } catch (e) { /* ignore */ }
       });
+    });
+    if (!hits.length) this.panelEmpty('这张列表里还没有可投影的诗歌。');
+    this.panelText(this.panelFoot, '点一首即投影（不改动当前播放列表） · 重开面板停在原处 · ↑ ↓ 选择 · Enter 确定 · Esc 收起');
+    if (restore && mem) this.restorePanelScroll(mem.playlist);
+  }
+
+  /* ===== 投影内「诗歌选择」界面（长按搜索框打开）=====
+     左栏诗歌分类；右栏先列首数分组（0=1–99 首、1=100–199 首 …、S=附录），
+     点分组再列该组诗歌，并带「← 返回首数分组」；换分类右栏立即换成新分类的分组。
+     cat / page 实时写进会话内存 → 关掉再打开仍停在原处；重启 Obsidian 回默认。 */
+  pickerState() {
+    const mem = listMemory(this.plugin);
+    return mem ? mem.picker : (this._pickerState || (this._pickerState = { cat: null, page: null, scroll: 0, cursor: -1 }));
+  }
+  /* 分类条目：全部诗歌 + 侧边栏那 8 本（只统计有 PDF 的诗歌） */
+  pickerCats() {
+    const all = (this.plugin && this.plugin.hymns) || [];
+    const counts = {};
+    let total = 0;
+    for (const h of all) {
+      if (!h || !h.pdfPath) continue;
+      total++;
+      const k = hymnCatKey(h);
+      counts[k] = (counts[k] || 0) + 1;
     }
-    if (!shown) this.panelEmpty('这张列表里还没有可投影的诗歌。');
-    this.panelText(this.panelFoot, '点一首即投影（不改动当前播放列表） · ↑ ↓ 选择 · Enter 确定 · Esc 收起');
+    const out = [{ key: 'ALL', name: '全部诗歌', count: total }];
+    CAT_ORDER.forEach((k) => out.push({ key: k, name: CATEGORIES[k].name, count: counts[k] || 0 }));
+    return out;
+  }
+  pickerHymns(cat) {
+    const all = (this.plugin && this.plugin.hymns) || [];
+    if (!cat) return [];
+    return all.filter((h) => h && h.pdfPath && (cat === 'ALL' || hymnCatKey(h) === cat));
+  }
+  /* 复用 addPanelRow 的行样式，只是把行挂到左栏或右栏里 */
+  addPickerRow(host, label, meta, active, onClick, extraCls) {
+    const saved = this.panelBody;
+    this.panelBody = host;
+    try { return this.addPanelRow(label, meta, active, onClick, extraCls); }
+    finally { this.panelBody = saved; }
+  }
+  shiftPickerCat(dir) {
+    const cats = this.pickerCats();
+    const st = this.pickerState();
+    let i = cats.findIndex((c) => c.key === st.cat);
+    if (i < 0) i = dir > 0 ? -1 : 0;
+    i = Math.max(0, Math.min(cats.length - 1, i + dir));
+    st.cat = cats[i].key; st.page = null; st.scroll = 0; st.cursor = -1;
+    this.renderPickerPanel(false);
+  }
+  renderPickerPanel(restore) {
+    if (!this.panelBody) return;
+    this.panelClear();
+    const st = this.pickerState();
+    const cats = this.pickerCats();
+    if (st.cat && !cats.some((c) => c.key === st.cat)) { st.cat = null; st.page = null; }
+    const wrap = this.panelBody.createDiv({ cls: 'hymns-proj-picker' });
+    const left = wrap.createDiv({ cls: 'hymns-proj-picker-cats' });
+    const right = wrap.createDiv({ cls: 'hymns-proj-picker-side' });
+    left.createDiv({ cls: 'hymns-proj-picker-colhead', text: '诗歌分类' });
+    right.createDiv({ cls: 'hymns-proj-picker-colhead', text: st.cat ? (st.page != null ? '诗歌列表' : '首数分组') : '请先选分类' });
+    const setTitle = (s) => this.panelText(this.panelTitle, '📖 诗歌选择 · ' + s);
+    // _panelRows 前 catCount 行是左栏分类，之后是右栏内容；键盘 ↑↓ 靠它分段
+    this._pickerCatCount = cats.length;
+    cats.forEach((c) => {
+      this.addPickerRow(left, c.name, c.count + ' 首', st.cat === c.key, () => {
+        st.cat = c.key; st.page = null;          // 换分类 → 右栏回到新分类的首数分组
+        st.scroll = 0; st.cursor = -1;
+        this.renderPickerPanel(false);
+      }, 'hymns-proj-picker-cat');
+    });
+    if (!st.cat) {
+      setTitle('选择分类');
+      right.createDiv({ cls: 'hymns-proj-panel-empty', text: '在左侧选一本诗歌，右侧会列出它的首数分组。' });
+      this.panelText(this.panelFoot, '长按搜索框 / 确定键打开 · ↑ ↓ 选分类 · → 确认 · 重开界面停在原处 · Esc 收起');
+      if (restore) this.restorePickerScroll(st);
+      this.ensurePickerCursor();
+      return;
+    }
+    const catName = (cats.find((c) => c.key === st.cat) || {}).name || '诗歌';
+    const pages = buildPages(this.pickerHymns(st.cat));
+    if (st.page != null && !pages.some((p) => p.key === st.page)) st.page = null;
+    if (st.page == null) {
+      setTitle(catName);
+      if (!pages.length) right.createDiv({ cls: 'hymns-proj-panel-empty', text: '这一本暂时没有可投影的诗歌。' });
+      pages.forEach((p) => {
+        this.addPickerRow(right, p.key, pickerPageLabel(p.key) + '（' + p.items.length + ' 首）', false, () => {
+          st.page = p.key; st.scroll = 0; st.cursor = -1;
+          this.renderPickerPanel(false);
+        }, 'hymns-proj-picker-page');
+      });
+      this.panelText(this.panelFoot, '0＝1–99 首，1＝100–199 首 … S＝附录 · 点分组看诗歌 · 重开界面停在原处');
+      if (restore) this.restorePickerScroll(st);
+      this.ensurePickerCursor();
+      return;
+    }
+    setTitle(catName + ' · ' + st.page + ' 组');
+    this.addPickerRow(right, '← 返回首数分组', '', false, () => {
+      st.page = null; st.scroll = 0; st.cursor = -1;
+      this.renderPickerPanel(false);
+    }, 'hymns-proj-panel-back');
+    const pg = pages.find((p) => p.key === st.page);
+    const hits = pg ? pg.items.filter((h) => h && h.pdfPath) : [];
+    const curKey = this.hymn && (this.hymn.uid || this.hymn.pdfPath);
+    hits.forEach((h, i) => {
+      const isCurrent = !!curKey && (h.uid || h.pdfPath) === curKey;
+      this.addPickerRow(right, hymnLabel(h), isCurrent ? '正在投影' : '', isCurrent, () => {
+        this.saveProjectionPanelState();
+        this.setNavSource('picker', hits, i);     // ← → 只在这一组诗歌里翻
+        this.setHymn(h, -1);                      // 从诗歌列表选歌 → 计入最近打开
+        this.closeProjectionPanel();
+        this.focusProjectionAfterPanelPick();
+        try { this.wake(); } catch (e) { /* ignore */ }
+      }, 'hymns-proj-picker-hymn');
+    });
+    if (!hits.length) right.createDiv({ cls: 'hymns-proj-panel-empty', text: '这一组没有可投影的诗歌。' });
+    this.panelText(this.panelFoot, '点一首或按 → 投影 · ← 返回重选首数 · ↑ ↓ 选择 · 重开界面停在原处 · Esc 收起');
+    if (restore) this.restorePickerScroll(st);
+    this.ensurePickerCursor();
   }
 
   /* 把「点菜单里的经文项」变成「按一次 Q/W/E」：合成 keydown 派发到 body，
@@ -3430,17 +3940,47 @@ class HymnProjection {
           this.closeProjectionPanel();
           return;
         }
+        // 诗歌选择界面：↑ ↓ 在当前活动栏移动；→ 确认并进入下一步（分类/分组/诗歌）；
+        // ← 返回上一级（诗歌→分组→分类→收起）。这里不用确定键：Enter 一律让行不确认。
+        if (this._panelKind === 'picker') {
+          if (k === 'ArrowRight') {
+            e.preventDefault(); e.stopPropagation();
+            this.activatePanelCursor();
+            return;
+          }
+          if (k === 'ArrowLeft') {
+            e.preventDefault(); e.stopPropagation();
+            this.pickerGoBack();
+            return;
+          }
+          // 诗歌选择界面里确定键不作为确认（用户明确要求）：吞掉，避免继续落到下面的
+          // Enter 分支触发当前行，或聚焦顶部搜索框把候选弹回来盖住选择界面。
+          if (k === 'Enter') {
+            e.preventDefault(); e.stopPropagation();
+            return;
+          }
+        }
         // ↑ ↓ / Home / End 移动面板高亮，Enter（确定键）投影当前诗歌。
         // 面板打开期间其余快捷键仍一律让行（空格 / P / D 不误触发播放、关投影、切整屏）。
         if (k === 'ArrowDown' || k === 'ArrowUp' || k === 'PageDown' || k === 'PageUp') {
           e.preventDefault(); e.stopPropagation();
-          this.movePanelCursor((k === 'ArrowDown' || k === 'PageDown') ? 1 : -1);
+          const d = (k === 'ArrowDown' || k === 'PageDown') ? 1 : -1;
+          if (this._panelKind === 'picker') this.movePickerCursor(d);
+          else this.movePanelCursor(d);
           return;
         }
         if (k === 'Home' || k === 'End') {
           e.preventDefault(); e.stopPropagation();
-          const total = (this._panelRows || []).length;
-          if (total) this.setPanelCursor(k === 'Home' ? 0 : total - 1);
+          if (this._panelKind === 'picker') {
+            const st = this.pickerState();
+            const catCount = this._pickerCatCount || 0;
+            const lo = st.cat ? catCount : 0;
+            const hi = st.cat ? (this._panelRows || []).length - 1 : catCount - 1;
+            if (hi >= lo) this.setPanelCursor(k === 'Home' ? lo : hi);
+          } else {
+            const total = (this._panelRows || []).length;
+            if (total) this.setPanelCursor(k === 'Home' ? 0 : total - 1);
+          }
           return;
         }
         if (k === 'Enter') {
@@ -3490,8 +4030,9 @@ class HymnProjection {
       this.close();
       return;
     }
-    // 确定键：焦点不在搜索框时把焦点交给顶部搜索框，方便直接输入编号 / 歌名找诗歌
-    // （与 Bible 投影一致）。焦点在投影内按钮 / 其它输入控件时让行，保留它们自己的键盘行为。
+    // 确定键：焦点不在搜索框时，短按＝把焦点交给顶部搜索框（与 Bible 投影一致，
+    // 方便直接输入编号 / 歌名）；长按约 550ms＝打开「诗歌选择」界面。
+    // 焦点在投影内按钮 / 其它输入控件时让行，保留它们自己的键盘行为。
     if (k === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
       const ae = this.docEl && this.docEl.activeElement;
       const tag = ae && ae.tagName ? String(ae.tagName).toUpperCase() : '';
@@ -3499,7 +4040,7 @@ class HymnProjection {
         tag === 'INPUT' || tag === 'TEXTAREA' || !!(ae && ae.isContentEditable);
       if (!interactive) {
         e.preventDefault(); e.stopPropagation();
-        this.focusProjSearch();
+        this.armEnterHold();
         return;
       }
     }
@@ -3808,6 +4349,9 @@ class HymnProjection {
     }
     this.el = null;
     try { d.removeEventListener('keydown', this._onKeyDown, true); } catch (e) { /* ignore */ }
+    try { d.removeEventListener('keyup', this._onKeyUp, true); } catch (e) { /* ignore */ }
+    try { d.removeEventListener('focusin', this._onFocusIn, true); } catch (e) { /* ignore */ }
+    if (this._enterHoldTimer) { clearTimeout(this._enterHoldTimer); this._enterHoldTimer = null; }
     try { d.removeEventListener('fullscreenchange', this._onFsChange); } catch (e) { /* ignore */ }
     try { this.win.removeEventListener('resize', this._onResize); } catch (e) { /* ignore */ }
     clearTimeout(this._idleTimer);
@@ -4245,6 +4789,36 @@ class HymnsView extends ItemView {
     if (!w && typeof window !== 'undefined') w = window.innerWidth || 0;   // 转屏瞬间的兜底
     const landscape = typeof window !== 'undefined' && window.innerWidth > window.innerHeight;
     return landscape ? (w >= 480) : (w >= 720);
+  }
+  /* 侧边栏「最近打开 / 播放列表」的会话位置记忆（只存内存，不写盘）。
+     视图重建时保留（像 _pdfScrollTop 一样不清零），重启 Obsidian 自然回默认。 */
+  homeMemory() {
+    if (!this._homeMemory) {
+      this._homeMemory = { valid: false, scroll: 0, sectionOpen: {}, playlistOpen: {}, pickedUid: null };
+    }
+    return this._homeMemory;
+  }
+  /* 双列时滚动容器是右列上层 .hymns-col-top，单列时是结果列表自身 */
+  homeScrollHost() {
+    return this.isWideEnough() ? (this.rightColTop || this.rightCol || this.resultsEl) : this.resultsEl;
+  }
+  saveHomeScroll() {
+    const host = this.homeScrollHost();
+    if (!host) return;
+    try { this.homeMemory().scroll = host.scrollTop || 0; } catch (e) { /* ignore */ }
+  }
+  restoreHomeScroll() {
+    const mem = this.homeMemory();
+    if (!mem.valid) return;
+    const host = this.homeScrollHost();
+    if (!host) return;
+    const top = mem.scroll || 0;
+    // 等本轮 DOM 重建完再恢复：empty() 之后 scrollHeight 还是 0，同步赋值会被丢掉
+    try {
+      if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(() => { try { host.scrollTop = top; } catch (e) { /* ignore */ } });
+      } else host.scrollTop = top;
+    } catch (e) { /* ignore */ }
   }
   /* 彻底销毁上一轮的「最近打开 / 播放列表」容器（它可能挂在右列，不在 resultsEl 里）。 */
   disposeHomeSections() {
@@ -5035,6 +5609,8 @@ class HymnsView extends ItemView {
   /* keepScroll=true 时保留列表当前滚动位置（退出 PDF 返回列表用）；否则回到顶部 */
   renderList(keepScroll) {
     if (!this.resultsEl) return;
+    // 从「最近打开 / 播放列表」里点诗再回到列表时，恢复原来的滚动位置
+    if (keepScroll) this.restoreHomeScroll();
     this.resultsEl.empty();
     // 注意：不要在这里销毁「最近打开 / 播放列表」。双列模式下它已被搬到右列，
     // 与左列（resultsEl）是两套容器；若每次重渲左列都销毁重建它，节点被替换的瞬间
@@ -5158,7 +5734,7 @@ class HymnsView extends ItemView {
       const rs = this.plugin.recent.map((c) => this.plugin.resolveHymn(c)).filter(Boolean);
       const s = new Set();
       rs.filter((h) => { if (s.has(h.uid)) return false; s.add(h.uid); return true; })
-        .forEach((h) => body.appendChild(this.renderItem(h)));
+        .forEach((h) => body.appendChild(this.renderItem(h, { fromRecent: true })));
     };
     this._playlistFill = (body) => {
       this.plugin.playlists.forEach((pl) => this.renderPlaylistRow(body, pl));
@@ -5237,7 +5813,10 @@ class HymnsView extends ItemView {
     const caret = head.createSpan({ cls: 'hymns-collapsible-caret' });
     setIcon(caret, 'chevron-right');
     const body = section.createDiv({ cls: 'hymns-collapsible-body' });
-    let open = !startCollapsed;
+    // 展开 / 折叠状态记在会话内存里：刷新内容或退出预览回来后原样复现，重启才回默认
+    const mem = this.homeMemory();
+    let open = Object.prototype.hasOwnProperty.call(mem.sectionOpen, title)
+      ? !!mem.sectionOpen[title] : !startCollapsed;
     const apply = () => {
       body.style.display = open ? '' : 'none';
       caret.style.transform = open ? 'rotate(90deg)' : 'rotate(0deg)';
@@ -5246,6 +5825,7 @@ class HymnsView extends ItemView {
     apply();
     head.addEventListener('click', () => {
       open = !open; apply();
+      mem.sectionOpen[title] = open;
       // 现在「最近打开 / 播放列表」是 .hymns-col-top 里的正常流元素，展开后由 .hymns-col-top 自然出滑条，
       // 无需再手动限高（那是之前绝对定位浮层时代的兜底，已废弃）。
     });
@@ -5273,22 +5853,28 @@ class HymnsView extends ItemView {
     }
 
     const body = wrap.createDiv({ cls: 'hymns-collapsible-body' });
-    let open = false, built = false;
+    // 歌单的展开状态与位置也记在会话内存里：点开某首诗歌再回到列表，
+    // 这张歌单仍是展开的，滚动位置也没变，可以接着看下一首；重启后回默认。
+    const mem = this.homeMemory();
+    let open = !!mem.playlistOpen[pl.name], built = false;
+    const build = () => {
+      built = true;
+      const list = pl.codes.map((c) => this.plugin.resolveHymn(c)).filter(Boolean);
+      if (!list.length) body.createDiv({ cls: 'hymns-note', text: '这个播放列表里还没有诗歌。' });
+      // 带上歌单上下文：此后预览里翻页、以及点播放，都限定在这个歌单之内
+      else list.forEach((h) => body.appendChild(this.renderItem(h, { list, name: pl.name })));
+    };
     const apply = () => {
       body.style.display = open ? '' : 'none';
       caret.style.transform = open ? 'rotate(90deg)' : 'rotate(0deg)';
       head.classList.toggle('is-open', open);
     };
+    if (open) build();          // 恢复展开时立刻把内容建出来，不能只把 body 显示出来
     apply();
     head.addEventListener('click', () => {
       open = !open;
-      if (open && !built) {
-        built = true;
-        const list = pl.codes.map((c) => this.plugin.resolveHymn(c)).filter(Boolean);
-        if (!list.length) body.createDiv({ cls: 'hymns-note', text: '这个播放列表里还没有诗歌。' });
-        // 带上歌单上下文：此后预览里翻页、以及点播放，都限定在这个歌单之内
-        else list.forEach((h) => body.appendChild(this.renderItem(h, { list, name: pl.name })));
-      }
+      if (open && !built) build();
+      mem.playlistOpen[pl.name] = open;
       apply();
     });
     return wrap;
@@ -5302,6 +5888,12 @@ class HymnsView extends ItemView {
     el.dataset.uid = h.uid;
     // 长按跳转定位到分类后，被长按的那首诗歌在此处高亮（与键盘选中的 is-selected 区分）
     if (this._jumpUid && this._jumpUid === h.uid) el.classList.add('hymns-jump-highlight');
+    // 在「最近打开 / 播放列表」里：刚点选（正在预览）的诗歌用 picked 标出，
+    // 退回列表后一眼能看到刚才看的是哪首；只在会话内存里，重启即清空。
+    if (ctx && (ctx.fromRecent || ctx.list) && this._homeMemory &&
+        this._homeMemory.pickedUid === h.uid) {
+      el.classList.add('hymns-picked');
+    }
 
     const badge = el.createSpan({ cls: 'hymns-badge', text: h.letter });
     badge.style.background = catInfo(h.letter).color;
@@ -5638,16 +6230,27 @@ class HymnsView extends ItemView {
      传入时把该集合设为正在浏览的列表 → 预览里上/下一首就在这个集合内翻，播放也按这个集合走。
      不传时：若正在浏览的列表里根本没有这首（例如上一次的歌单上下文已不适用），退回全部诗歌。 */
   openInViewer(h, ctx) {
+    // 「最近打开」里点诗是回看：不能 addRecent（否则这首被顶到第一、列表被刷新，
+    // 用户就没法接着看下一首历史了）。从播放列表 / 搜索 / 分类等别处点进来才计入。
+    const fromRecent = !!(ctx && ctx.fromRecent);
+    const fromList = !!(ctx && ctx.list && ctx.list.length);
+    // 从这两个区块点进来就记住位置，回到列表时原样复现；从别处打开则不必停留。
+    const mem = this.homeMemory();
+    mem.valid = fromRecent || fromList;
+    // 记住刚点选的这一首：退回「最近打开 / 播放列表」后把它标出来（会话内存，重启即清）
+    mem.pickedUid = h && h.uid ? h.uid : null;
+    if (mem.valid) this.saveHomeScroll();
     // 查看 PDF 仅用于“查阅”：只切换正在浏览的列表与当前查看的诗歌，
     // 绝不改动当前播放列表（currentSequence），也不改动播放指针（activeHymn/activeIndex）。
-    if (ctx && ctx.list && ctx.list.length) this.setBrowseList(ctx.list, ctx.name);
+    if (fromList) this.setBrowseList(ctx.list, ctx.name);
     else if (!(this.currentList || []).some((x) => x.uid === h.uid)) this.setBrowseList(this.hymns.slice());
     this.viewHymn = h;
-    // 预览（打开 PDF 查阅）也算“打开过”，计入最近打开，退出预览回到列表即可看到
-    this.plugin.addRecent(h);
+    // 预览（打开 PDF 查阅）也算“打开过”，计入最近打开，退出预览回到列表即可看到。
+    // 回看历史里的诗歌例外：只查阅、不改历史次序，也不重刷这两块内容。
+    if (!fromRecent) this.plugin.addRecent(h);
     // 双列模式下「最近打开」就摆在右列（预览时也可见），立刻刷新，
     // 不用等退出预览才看到这一首；单列时列表被 PDF 盖住，等退出再刷新即可
-    if (this.isWideEnough()) this.refreshHomeSections();
+    if (!fromRecent && this.isWideEnough()) this.refreshHomeSections();
     this.viewIndex = Math.max(0, this.currentList.findIndex((x) => x.uid === h.uid));
     this.mode = 'viewer';
     this.listWrap.style.display = 'none';
@@ -5658,7 +6261,13 @@ class HymnsView extends ItemView {
     try { this.viewerWrap.focus({ preventScroll: true }); } catch (e) { /* ignore */ }
     this.autoPlayIfEnabled(h);          // 设置里打开后，查看 PDF 即自动播放其音频
   }
-  closeViewer() { this.renderListMode(true); }
+  closeViewer() {
+    this.renderListMode(true);
+    // 退回列表后原地刷新这两块：让刚点选的那首在新渲染的行里带上 picked 标记。
+    // 只在「最近打开 / 播放列表」区块上重建 body，不改历史次序、不动位置记忆。
+    try { this.refreshHomeSections(); } catch (e) { /* ignore */ }
+    try { this.restoreHomeScroll(); } catch (e) { /* ignore */ }
+  }
 
   /* 让某个面板直接按 uid 预览指定诗歌（而不是停在列表），供外部调用。
      ] 快捷键与「在新标签打开 PDF」按钮不走这里：它们用系统 PDF 阅读器打开文件。 */
@@ -6194,6 +6803,9 @@ class HymnsPlugin extends Plugin {
     this._projResume = null;       // { hymn, pageNo }：被经文投影请走时记下，下次 P 原样恢复
     this._projHistory = [];        // recent 的诗歌对象视图（与「最近打开」面板同序，最新在前）
     this._projHistoryIndex = -1;   // 当前在面板里的行号（-1 ＝ 空白首页，还没进入历史）
+    /* 会话内存：诗歌选择界面停在哪、历史 / 播放列表面板看到哪、侧边栏展开到哪。
+       不持久化 → 重启 Obsidian 一律回到默认，符合用户要求。 */
+    this._listMemory = newListMemory();
 
     /* 与 Bible Search and Reader 的投影联动：经文投影存在时按 Q/W/E，对方会派发
        hymns:projection-close，请求诗歌投影自行收起（退出整屏、移除图层、清理键盘监听），
@@ -7774,6 +8386,11 @@ class HymnsPlugin extends Plugin {
   addRecent(hymnOrId) {
     const id = (hymnOrId && hymnOrId.uid) ? hymnOrId.uid : hymnOrId;
     if (!id) return;
+    // 从搜索 / 诗歌列表 / 播放等「别的地方」打开了一首 → recent 顺序变了，
+    // 投影历史面板就不用再停在之前回看的位置（重启 / 别处打开都回到默认）。
+    // 侧边栏的列表位置由 openInViewer 按点击来源单独决定，不在这里清。
+    const mem = listMemory(this);
+    if (mem) mem.recent.valid = false;
     const target = this.resolveHymn(id);
     const targetUid = target ? target.uid : id;
     const seen = new Set([targetUid]);

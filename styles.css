@@ -376,6 +376,13 @@ button.hymns-icon-btn.hymns-icon-btn.hymns-random-btn:hover { color: var(--inter
 }
 .hymns-item:hover { background: var(--background-modifier-hover); }
 .hymns-item.is-selected { background: var(--background-modifier-active); border-color: var(--interactive-accent); }
+/* 「最近打开 / 播放列表」里刚点选的诗歌：退回列表后仍标出这一首（与键盘 is-selected、长按 jump 区分） */
+.hymns-item.hymns-picked {
+  border-color: var(--interactive-accent);
+  border-left-width: 3px;
+  background: var(--background-modifier-active);
+  box-shadow: inset 3px 0 0 0 var(--interactive-accent);
+}
 
 /* 长按跳转后高亮被长按的那首诗歌：强调左边框 + 轻微底色 + 一次性脉冲（与键盘选中的 is-selected 区分） */
 .hymns-item.hymns-jump-highlight {
@@ -1310,6 +1317,54 @@ body.is-mobile .hymns-proj .hymns-proj-tools { -webkit-app-region: no-drag; }
   border-top: 1px solid rgba(255, 255, 255, .10);
   font-size: 11px; line-height: 1.5; color: #cba9ff;
 }
+/* ===== 投影内「诗歌选择」界面（长按搜索框打开）=====
+   与历史 / 播放列表面板同款深色浮层，但更宽：左栏诗歌分类，
+   右栏先是首数分组（0 / 1 / 2 … / S），点分组后变成该组诗歌列表。 */
+.hymns-proj .hymns-proj-panel.is-picker {
+  width: min(580px, calc(100vw - 24px));
+  max-height: min(74vh, 560px);
+}
+.hymns-proj .hymns-proj-panel.is-picker .hymns-proj-panel-body {
+  display: flex; flex-direction: column;
+  padding: 0; overflow: hidden;
+}
+.hymns-proj .hymns-proj-picker {
+  flex: 1 1 auto; min-height: 0;
+  display: flex; align-items: stretch;
+}
+.hymns-proj .hymns-proj-picker-cats,
+.hymns-proj .hymns-proj-picker-side {
+  min-width: 0;
+  overflow-y: auto; overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  -webkit-app-region: no-drag;
+}
+.hymns-proj .hymns-proj-picker-cats {
+  flex: 0 0 38%; max-width: 210px;
+  padding: 4px 6px 8px;
+  border-right: 1px solid rgba(255, 255, 255, .10);
+}
+.hymns-proj .hymns-proj-picker-side {
+  flex: 1 1 auto;
+  padding: 4px 6px 8px;
+}
+.hymns-proj .hymns-proj-picker-colhead {
+  position: sticky; top: 0; z-index: 1;
+  padding: 6px 8px; margin-bottom: 4px;
+  font-size: 11px; font-weight: 600; letter-spacing: .04em;
+  color: #cba9ff;
+  background: #211d38;
+  border-bottom: 1px solid rgba(255, 255, 255, .10);
+}
+.hymns-proj button.hymns-proj-picker-cat.is-current {
+  background: rgba(126, 110, 220, .32); color: #fff;
+  box-shadow: inset 3px 0 0 #cba9ff;
+}
+.hymns-proj button.hymns-proj-picker-page .hymns-proj-panel-row-label {
+  flex: 0 0 30px; font-weight: 700; font-size: 14px;
+}
+.hymns-proj .hymns-proj-picker-side .hymns-proj-panel-empty { padding: 16px 10px; }
+
 @media (max-width: 480px) {
   .hymns-proj .hymns-proj-panel {
     top: calc(var(--hymns-safe-top, 0px) + 54px);
@@ -1318,4 +1373,11 @@ body.is-mobile .hymns-proj .hymns-proj-tools { -webkit-app-region: no-drag; }
     max-height: min(52vh, 400px);
   }
   .hymns-proj button.hymns-proj-panel-row { padding: 8px 9px; font-size: 12px; }
+  .hymns-proj .hymns-proj-panel.is-picker {
+    width: min(340px, calc(100vw - 20px));
+    max-height: min(66vh, 470px);
+  }
+  .hymns-proj .hymns-proj-picker-cats { flex-basis: 42%; max-width: 132px; padding: 3px 4px 6px; }
+  .hymns-proj .hymns-proj-picker-side { padding: 3px 4px 6px; }
+  .hymns-proj .hymns-proj-picker-colhead { font-size: 10px; padding: 5px 6px; }
 }
