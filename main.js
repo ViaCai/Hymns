@@ -165,6 +165,23 @@ const UPDATE_BASE = 'https://raw.githubusercontent.com/' + UPDATE_REPO + '/' + U
 
 // ==================== 更新日志内容（供弹窗离线展示；缺失时回退到远端 CHANGELOG.md）====================
 const CHANGELOG_CONTENT = {
+  '2.8.0': `## [2.8.0] - 2026-11-21
+
+### 本次更新
+- **投影通告**：投影可显示顶部 / 底部通告，选「全选」时上下两区各显示一条不同的通告；顶栏喇叭按钮或 \`N\` 键开关。内容是仓库里的 \`bible-notice.md\`，与「Bible Search and Reader」共用同一份——在哪个插件里改，另一端都跟着变。
+- **通告管理就地编辑**：双击通告区打开管理面板，可新增、编辑、删除，单击条目立即切换显示，点「完成」或 Esc 收起；拖动分界线实时改区高，内容超出区高时可用滚轮 / 滑轨滚动。
+- **投影时钟**：顶栏模式按钮右侧显示 24 小时制本地时间，跟随投影主题配色；窄屏自动藏掉秒数、再窄就整个收起，不挤占搜索框。
+- **投影设置新增两组**：「时间」可开关显示时间、显示秒数、调时间字号（16–96px）；「投影通告」可调模式、通告文件夹、上下区高度（40–360px）、公告标题 / 正文字号（12–96px）、分界线粗细（1–12px），滑条拖动即时生效。
+
+### 修复
+- **通告区不再压住画面**：投影内容按「工具条高度 + 通告区高度」整体让位，诗歌不会再画进通告条里；底栏始终贴底，不被通告区盖住。
+- **通告文件位置跟随**：任一端改了通告文件夹，另一端读文件前会先找到现有的 \`bible-notice.md\` 跟过去，不会在根目录再生成一份空的。
+- **通告文件夹不再改一半就被搬走**：改成「确定 / 取消」＋输入框一键清空，按确定时有「移动中… / ✓ 已保存 / ✗ 失败」回执；目标处已有同名文件会先备份再覆盖。
+- **文件夹候选列表关不掉**：修复连续触发时插入两份候选弹窗、点哪里都关不掉的问题。
+
+### 小提示
+- 与经文投影互切建议搭配「Bible Search and Reader」6.2.0 或更新版，两个插件一起更新最省心。`,
+
   '2.7.1': `## [2.7.1] - 2026-11-16
 
 ### 本次更新
@@ -2314,6 +2331,132 @@ function supportsAppRegionDrag() {
   return false;
 }
 
+/* ===== 投影通告：与 Bible search and reader 共用同一份 md =====
+   文件名固定 bible-notice.md；状态块 enabled / active / activeTop / activeBottom，
+   正文每个 `## 标题` 是一条通告。两个插件通过 document 上的 CustomEvent 同步，
+   谁写盘谁广播，另一端照着刷新，不需要互相持有插件实例。 */
+const NOTICE_FILENAME = 'bible-notice.md';
+const NOTICE_DOC_DEFAULT_PATH = NOTICE_FILENAME;
+const NOTICE_STATE_RE = /<!--\s*bible-proj-notice-state\s*([\s\S]*?)\s*-->/;
+const NOTICE_STATE_EVENT = 'bible-notice:changed';
+const NOTICE_PATH_EVENT = 'bible-notice:pathchanged';
+// 通告显示设置（模式 / 上下区高度 / 标题字号 / 正文字号 / 分界线粗细）变更广播：
+// 两端各存各的 data.json，改动时把快照发给另一端，保证「一端改顶部，另一端也顶部」。
+const NOTICE_SETTINGS_EVENT = 'bible-notice:settings';
+const NOTICE_MODES = ['top', 'bottom', 'all'];
+
+function normalizeNoticeFolder(value) {
+  let s = String(value == null ? '' : value).trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  // 兼容旧设置里填过的完整文件路径：整段文件名都去掉，只留文件夹部分
+  if (/\.md$/i.test(s)) {
+    const i = s.lastIndexOf('/');
+    s = i >= 0 ? s.slice(0, i) : '';
+  }
+  return s.length > 200 ? s.slice(0, 200) : s;
+}
+function noticeDocPath(folder) {
+  const f = normalizeNoticeFolder(folder);
+  return f ? f + '/' + NOTICE_FILENAME : NOTICE_DOC_DEFAULT_PATH;
+}
+function normalizeNoticeMode(value) {
+  if (value === 'top' || value === 'top-zone' || value === 'zone') return 'top';
+  if (value === 'bottom' || value === 'bottom-zone' || value === 'bar' || value === 'float') return 'bottom';
+  if (value === 'all' || value === 'both') return 'all';
+  return 'top';
+}
+function normalizeNoticeZoneHeight(value) {
+  const n = parseInt(value, 10);
+  if (!Number.isFinite(n) || n < 40) return 120;
+  return Math.min(360, n);
+}
+function normalizeNoticeFontSize(value) {
+  if (value == null || value === '' || value === 'auto') return null;
+  const n = parseInt(value, 10);
+  if (!Number.isFinite(n) || n < 12) return null;
+  return Math.min(96, n);
+}
+function normalizeNoticeDividerWidth(value) {
+  const n = parseInt(value, 10);
+  if (!Number.isFinite(n) || n < 1) return 2;
+  return Math.min(12, n);
+}
+// ===== 投影时钟：与 Bible 投影同一套规则 —— 24 小时制，按设置决定是否带秒 =====
+function formatProjectionClock(date, withSeconds) {
+  const d = (date instanceof Date) ? date : new Date();
+  const pad = (n) => (n < 10 ? '0' : '') + n;
+  return pad(d.getHours()) + ':' + pad(d.getMinutes()) + (withSeconds ? ':' + pad(d.getSeconds()) : '');
+}
+function normalizeProjectionClockFontSize(value) {
+  const n = parseInt(value, 10);
+  if (!Number.isFinite(n)) return 40;
+  return Math.max(16, Math.min(96, n));
+}
+function parseNoticeDoc(text) {
+  const src = typeof text === 'string' ? text : '';
+  const state = { enabled: false, active: 0, activeTop: 0, activeBottom: 0 };
+  const m = src.match(NOTICE_STATE_RE);
+  if (m) {
+    const em = m[1].match(/^\s*enabled\s*:\s*(true|false|1|0|on|off)\s*$/im);
+    if (em) state.enabled = /^(true|1|on)$/i.test(em[1]);
+    const am = m[1].match(/^\s*active\s*:\s*(-?\d+)\s*$/im);
+    if (am) state.active = Math.max(0, parseInt(am[1], 10) || 0);
+    for (const key of ['activeTop', 'activeBottom']) {
+      const re = new RegExp('^\\s*' + key + '\\s*:\\s*(-?\\d+)\\s*$', 'im');
+      const mm = m[1].match(re);
+      state[key] = mm ? Math.max(0, parseInt(mm[1], 10) || 0) : state.active;
+    }
+  }
+  const items = [];
+  let cur = null;
+  for (const line of src.replace(NOTICE_STATE_RE, '').split(/\r?\n/)) {
+    const h = line.match(/^\s*##\s+(.+?)\s*$/);
+    if (h) { cur = { title: h[1], body: '' }; items.push(cur); }
+    else if (cur) cur.body += (cur.body ? '\n' : '') + line;
+  }
+  for (const it of items) it.body = it.body.replace(/^\s*\n+|\n+\s*$/g, '');
+  state.items = items;
+  const last = Math.max(0, items.length - 1);
+  state.active = Math.min(state.active, last);
+  state.activeTop = Math.min(state.activeTop, last);
+  state.activeBottom = Math.min(state.activeBottom, last);
+  return state;
+}
+function serializeNoticeDoc(state, items) {
+  const s = state || {};
+  const list = Array.isArray(items) ? items : (Array.isArray(s.items) ? s.items : []);
+  const enabled = !!s.enabled ? 'true' : 'false';
+  const active = Math.max(0, parseInt(s.active, 10) || 0);
+  const idxOf = (key) => {
+    const v = s[key] != null ? parseInt(s[key], 10) : NaN;
+    return Number.isFinite(v) && v >= 0 ? v : active;
+  };
+  const head = '<!-- bible-proj-notice-state\nenabled: ' + enabled +
+    '\nactive: ' + active + '\nactiveTop: ' + idxOf('activeTop') +
+    '\nactiveBottom: ' + idxOf('activeBottom') + '\n-->\n\n';
+  const parts = list.map(it => {
+    const title = String((it && it.title) || '').replace(/\s+/g, ' ').trim() || '未命名通告';
+    const body = String((it && it.body) || '').replace(/^\s*\n+|\n+\s*$/g, '');
+    return '## ' + title + '\n\n' + (body ? body + '\n' : '');
+  });
+  return head + parts.join('\n') + (parts.length ? '' : '## 未命名通告\n\n在这里写通告内容。\n');
+}
+function buildNoticeDoc() {
+  const lines = [
+    '1.第一次使用公告，会自动在根目录生成bible-notice.md文档。',
+    '2.该文件是投影通告的数据源，文件名不可更改，作为BSAR和Hymns插件共用文件。',
+    '3.不可擅自移动该文件位置，可通过投影设置里“通告文件夹”设置来更改存储位置。',
+    '4.每个 ## 标题是一条通告，下面的文字是正文，可在md文档或在插件里直接修改。',
+    '5.正文按 Enter 换行；再加一个 ## 标题就多一条通告。',
+    '6.投影时双击通告区打开通告管理，双击条目编辑，单击条目立即显示。',
+    '7.投影时按喇叭按钮或 N 键开关通告，其它设置都在 ⚙ 投影设置里。',
+    '8.选通告模式选「全选」时，上下两区可以各显示一条不同的通告。',
+    '9.修改完通告内容，保存后公告画面自动更新。'
+  ];
+  return serializeNoticeDoc({ enabled: false, active: 0, activeTop: 0, activeBottom: 0 }, [
+    { title: '通告操作说明', body: lines.join('\n') }
+  ]);
+}
+
 class HymnProjection {
   constructor(app, plugin, hymn, doc, view, startFs = false) {
     this.app = app;
@@ -2369,11 +2512,36 @@ class HymnProjection {
     this._onFocusIn = (e) => this.onProjFocusIn(e);
     this._onResize = () => {
       this.scheduleFit();
+      // 工具条换行 / 时钟字号变化会改高度：通告区起点跟着重算，别压住搜索框
+      try { this.applyNoticeLayout(); } catch (e) { /* ignore */ }
       // 工具条换行 / 窗口尺寸变化会挪动搜索框：选择界面开着时跟着重新对齐
       if (this._panelKind === 'picker' && this.panelEl && this.panelEl.parentNode) this.alignPickerPanel();
     };
     this._onFsChange = () => this.onFullscreenChange();
     this._onAudio = () => this.syncPlayState();
+
+    // 投影通告（与 Bible 插件共用 bible-notice.md）
+    this._notice = { enabled: false, active: 0, activeTop: 0, activeBottom: 0, items: [] };
+    this._noticeMode = 'top';
+    this._noticePanelsOpen = false;
+    this._noticeManagerEl = null;
+    this._noticeManagerZone = null;
+    this._noticeManagerKey = 'top';
+    this._noticeEditingIndex = -1;
+    this._noticeLastClickedIndex = -1;
+    this._noticePreviewEl = null;
+    this._noticeEvent = null;
+    this._noticePathEvent = null;
+    this._noticeVaultEvent = null;
+    this._noticeOutside = null;
+    this._noticeOutsideEvents = null;
+    this._settingsPanel = null;
+    this._settingsOutside = null;
+    this._settingsOutsideEvents = null;
+    this._folderOptionsEl = null;
+    this._folderOptionsToken = 0;
+    this._folderOutside = null;
+    this._folderOutsideEvents = null;
   }
 
   open() {
@@ -2387,6 +2555,8 @@ class HymnProjection {
     this.el = el;
 
     this.stageEl = el.createDiv({ cls: 'hymns-proj-stage' });
+    // 通告区挂在投影层内部（整屏 top layer 会盖住 body 上的浮层）
+    this.initNoticeDom();
     this.tipEl = el.createDiv({ cls: 'hymns-proj-tip', text: '正在打开投影…' });
 
     // 顶部「不可见」拖动带：桌面端 Electron 让按住顶部＝拖动整个 Obsidian 窗口。
@@ -2418,6 +2588,11 @@ class HymnProjection {
       this.showModeMenu(this.modeWrap);
     });
     this.syncModeLabel();
+
+    // 顶栏时钟：24 小时制，紧挨左上角的模式按钮（与 Bible 投影同一位置），
+    // 开关 / 是否带秒 / 字号都在 ⚙ 投影设置里。挂在工具条内部，随工具条一起淡出。
+    this.clockEl = this.toolsEl.createDiv({ cls: 'hymns-proj-clock', attr: { title: '本地时间（24 小时制）' } });
+    this.refreshProjectionClock();
 
     // 顶部搜索：输入编号 / 歌名 / 歌词即弹出候选，点一条直接换诗歌。
     // 有内容时，输入框内与候选框顶部都给出一键清空，投影中途不用退出去找歌。
@@ -2520,7 +2695,9 @@ class HymnProjection {
       setIcon(this.fsBtn, 'maximize');
       this.fsBtn.addEventListener('click', () => this.setFullscreen(!this._fullscreen));
     }
-    this.closeBtn = this.actionsEl.createEl('button', { cls: 'hymns-proj-btn', attr: { 'aria-label': '退出投影（Esc / P）', title: '退出投影（Esc / P）' } });
+    // 通告开关、投影设置，最后才是退出：关闭按钮挪到最右边，误触退出的概率更低
+    this.initNoticeControls();
+    this.closeBtn = this.actionsEl.createEl('button', { cls: 'hymns-proj-btn hymns-proj-close-btn', attr: { 'aria-label': '退出投影（Esc / P）', title: '退出投影（Esc / P）' } });
     setIcon(this.closeBtn, 'x');
     this.closeBtn.addEventListener('click', () => this.close());
 
@@ -2586,6 +2763,7 @@ class HymnProjection {
     }
     this.updateChrome();
     this.syncPlayState();
+    this.initNotice();
     try { el.focus({ preventScroll: true }); } catch (e) { /* ignore */ }
     if (this.hymn) {
       // 从「最近打开」回看投影：绝不 addRecent，否则这首被顶到第一行、后面没法接着翻
@@ -3242,6 +3420,11 @@ class HymnProjection {
     // 作用在播放条 / 搜索候选框上的滚动交给控件自己处理
     if (this.playbarEl && e.target && this.playbarEl.contains(e.target)) return;
     if (this.searchWrap && e.target && this.searchWrap.contains(e.target)) return;
+    // 通告区 / 通告管理 / 投影设置面板里都有可滚动内容：滚轮要交还给它们自己，
+    // 否则下面的 preventDefault 会把滚动整个吃掉，还顺带误翻页。
+    if (this._settingsPanel && e.target && this._settingsPanel.contains && this._settingsPanel.contains(e.target)) return;
+    if (this.noticeTopZoneEl && e.target && this.noticeTopZoneEl.contains && this.noticeTopZoneEl.contains(e.target)) return;
+    if (this.noticeBottomZoneEl && e.target && this.noticeBottomZoneEl.contains && this.noticeBottomZoneEl.contains(e.target)) return;
     // 「最近打开 / 播放列表」面板里是可滚动列表：滚轮必须交还给 panelBody，
     // 否则下面的 preventDefault 会把列表滚动整个吃掉，还会顺带误翻页。
     if (this.panelEl && this.panelEl.parentNode && e.target && this.panelEl.contains(e.target)) return;
@@ -3950,6 +4133,30 @@ class HymnProjection {
     if (this._closed || e.isComposing) return;
     if (e._hymnsHandled) return;                 // 同一按键若已被视图层（P/[ ]）处理过，这里不再重复处理
     const k = e.key;
+    // 通告管理 / 投影设置面板打开时其余快捷键一律让行，别抢编辑框的 Enter 换行。
+    if (this._noticePanelsOpen || this._settingsPanel) {
+      if (k === 'Escape') {
+        e.preventDefault(); e.stopPropagation();
+        if (this._settingsPanel) this.closeProjectionSettings();
+        else this.closeNoticeManager();
+        return;
+      }
+      if (this._settingsPanel) return;
+      const ae = (typeof document !== 'undefined') ? document.activeElement : null;
+      if (k === 'Enter' || (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA'))) return;
+    }
+    // 喇叭按钮之外的 N 键开关：只在真实数据层就绪时消费，测试桩不受影响
+    if ((k === 'n' || k === 'N') && this.plugin && typeof this.plugin.noticeDocPath === 'function' &&
+        !e.ctrlKey && !e.metaKey && !e.altKey) {
+      // 打字（投影搜索框 / 通告编辑框 / 笔记正文）时绝不抢 N
+      const aeN = this.docEl && this.docEl.activeElement;
+      const tgtN = e && e.target;
+      if ((tgtN && tgtN.closest && tgtN.closest('input, textarea, select, [contenteditable="true"]')) ||
+          (aeN && aeN.closest && aeN.closest('input, textarea, select, [contenteditable="true"]'))) return;
+      e.preventDefault(); e.stopPropagation();
+      this.toggleNoticeEnabled();
+      return;
+    }
     // 浮层开着时第一次 ESC 只收浮层，第二次才关投影（与 BSAR 侧一致）。
     // 最近打开 / 播放列表面板打开期间，其余快捷键一律让行：否则点着列表按空格
     // 会误触发播放、按 P 会直接把投影关掉。
@@ -4289,9 +4496,1032 @@ class HymnProjection {
     }, 180);
   }
 
+  /* ===== 顶栏时钟：递归 setTimeout（不用 setInterval），关投影 / 关开关都能干净停掉 ===== */
+  refreshProjectionClock() {
+    if (this._clockTimer) { clearTimeout(this._clockTimer); this._clockTimer = null; }
+    const el = this.clockEl;
+    if (!el || this._closed) return;
+    const tick = () => {
+      this._clockTimer = null;
+      if (this._closed || !this.clockEl) return;
+      const s = (this.plugin && this.plugin.settings) || {};
+      const enabled = s.projectionClockEnabled !== false;
+      this.clockEl.classList.toggle('is-hidden', !enabled);
+      this.clockEl.style.fontSize = normalizeProjectionClockFontSize(s.projectionClockFontSize) + 'px';
+      if (!enabled) return;
+      this.clockEl.textContent = formatProjectionClock(new Date(), !!s.projectionClockSeconds);
+      this._clockTimer = setTimeout(tick, 1000);
+    };
+    tick();
+  }
+
+  /* ===== 投影通告：区域、管理、设置 ===== */
+  initNoticeDom() {
+    const el = this.el;
+    if (!el || !el.createDiv) return;
+    this.noticeTopZoneEl = el.createDiv({ cls: 'hymns-proj-notice-zone hymns-proj-notice-zone-top is-hidden' });
+    this.noticeTopResizerEl = el.createDiv({ cls: 'hymns-proj-notice-resizer hymns-proj-notice-resizer-top is-hidden' });
+    this.noticeBottomResizerEl = el.createDiv({ cls: 'hymns-proj-notice-resizer hymns-proj-notice-resizer-bottom is-hidden' });
+    this.noticeBottomZoneEl = el.createDiv({ cls: 'hymns-proj-notice-zone hymns-proj-notice-zone-bottom is-hidden' });
+    const bindZone = (zone) => {
+      if (!zone || !zone.addEventListener) return;
+      // 单击只选中；双击才展开管理（第一次单击不重建列表，避免吞掉 dblclick）
+      zone.addEventListener('dblclick', (e) => {
+        if (e && e.target && e.target.closest && e.target.closest('.hymns-proj-notice-manage')) return;
+        this.openNoticeManager(zone);
+      });
+    };
+    bindZone(this.noticeTopZoneEl);
+    bindZone(this.noticeBottomZoneEl);
+    const bindResize = (resizer, key) => {
+      if (!resizer || !resizer.addEventListener) return;
+      resizer.addEventListener('pointerdown', (e) => {
+        if (!e || typeof e.clientY !== 'number') return;
+        // 拖分隔线不能再让投影层的翻页手势 / 点击委托接手，否则拖到一半就被当成滑动了
+        if (e.preventDefault) e.preventDefault();
+        if (e.stopPropagation) e.stopPropagation();
+        const startY = e.clientY;
+        const start = normalizeNoticeZoneHeight((this.plugin && this.plugin.settings && this.plugin.settings[key]) || 120);
+        const dir = key === 'noticeTopZoneHeight' ? 1 : -1;
+        const move = (ev) => {
+          const next = Math.max(40, Math.min(360, start + dir * (ev.clientY - startY)));
+          this.applyNoticeSetting(key, next, false);
+          if (this._settingsValueEls && this._settingsValueEls[key]) {
+            this._settingsValueEls[key].textContent = next + ' px';
+          }
+          if (this._settingsRangeEls && this._settingsRangeEls[key]) {
+            this._settingsRangeEls[key].value = String(next);
+          }
+        };
+        const up = () => {
+          try { document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', up); } catch (err) { /* ignore */ }
+          this.saveNoticeSettings();
+        };
+        try { document.addEventListener('pointermove', move); document.addEventListener('pointerup', up); } catch (err) { /* ignore */ }
+      });
+    };
+    bindResize(this.noticeTopResizerEl, 'noticeTopZoneHeight');
+    bindResize(this.noticeBottomResizerEl, 'noticeBottomZoneHeight');
+  }
+
+  initNoticeControls() {
+    const host = this.actionsEl;
+    if (!host || !host.createEl) return;
+    this.noticeBtn = host.createEl('button', {
+      cls: 'hymns-proj-btn hymns-proj-notice-btn',
+      attr: { type: 'button', 'aria-label': '开关公告（N）', title: '开关公告（N）' }
+    });
+    // 图标与其它圆按钮同一套线性图标；以前用 📢 emoji，是彩色实心，和旁边的描边按钮完全不搭
+    setIcon(this.noticeBtn, 'megaphone');
+    if (typeof this.noticeBtn.querySelector === 'function' && !this.noticeBtn.querySelector('svg')) {
+      this.noticeBtn.textContent = '📢';   // 极老版本没有 megaphone 图标时兜底
+    }
+    this.noticeBtn.addEventListener('click', (e) => {
+      if (e && e.stopPropagation) e.stopPropagation();
+      this.toggleNoticeEnabled();
+    });
+    this.settingsBtn = host.createEl('button', {
+      cls: 'hymns-proj-btn hymns-proj-settings-btn',
+      attr: { type: 'button', 'aria-label': '投影设置', title: '投影设置' }
+    });
+    setIcon(this.settingsBtn, 'settings');
+    this.settingsBtn.addEventListener('click', (e) => {
+      if (e && e.stopPropagation) e.stopPropagation();
+      if (this._settingsPanel) this.closeProjectionSettings();
+      else this.showProjectionSettings(this.settingsBtn);
+    });
+  }
+
+  initNotice() {
+    const plugin = this.plugin;
+    if (!plugin || typeof plugin.readNoticeDoc !== 'function' || typeof document === 'undefined') return;
+    const load = () => plugin.readNoticeDoc(false).then((s) => { if (!this._closed) this.applyNoticeState(s); });
+    // 先对齐文件实际位置（另一端可能搬过文件夹），再读内容
+    const ready = (typeof plugin.adoptNoticeLocation === 'function') ? plugin.adoptNoticeLocation() : null;
+    if (ready && typeof ready.then === 'function') ready.then(load).catch(load);
+    else load();
+    if (!this._noticeEvent) {
+      this._noticeEvent = (e) => {
+        if (this._closed || !e || !e.detail || !e.detail.path) return;
+        if (e.detail.path !== plugin.noticeDocPath()) return;
+        if (e.detail.source === 'hymns') return;
+        this.applyNoticeState(e.detail);
+        if (this._noticePanelsOpen) this.fillNoticePanel();
+      };
+      document.addEventListener(NOTICE_STATE_EVENT, this._noticeEvent);
+    }
+    if (!this._noticePathEvent) {
+      this._noticePathEvent = () => {
+        if (this._closed) return;
+        plugin.readNoticeDoc(false).then((s) => { if (!this._closed) this.applyNoticeState(s); });
+      };
+      document.addEventListener(NOTICE_PATH_EVENT, this._noticePathEvent);
+    }
+    if (!this._noticeSettingsEvent) {
+      // 另一端改了模式 / 高度 / 字号 / 分界线：同步到本地并重画，设置面板开着就原地刷新
+      this._noticeSettingsEvent = (e) => {
+        if (this._closed || !e || !e.detail || e.detail.source === 'hymns') return;
+        if (typeof plugin.applyNoticeSettingsSnapshot !== 'function') return;
+        // 插件级监听可能已经先写过设置（返回 false），这里照样要重画一次
+        if (plugin.applyNoticeSettingsSnapshot(e.detail)) {
+          try { const r = plugin.saveAll(); if (r && typeof r.catch === 'function') r.catch(() => { /* ignore */ }); } catch (err) { /* ignore */ }
+        }
+        this.refreshNoticeSettingsUi();
+        this.renderNotice();
+      };
+      document.addEventListener(NOTICE_SETTINGS_EVENT, this._noticeSettingsEvent);
+    }
+    if (!this._noticeVaultEvent && this.app && this.app.vault && typeof this.app.vault.on === 'function') {
+      this._noticeVaultEvent = (file) => {
+        if (this._closed || !file || !file.path || file.path !== plugin.noticeDocPath()) return;
+        plugin.readNoticeDoc(false).then((s) => { if (!this._closed) this.applyNoticeState(s); });
+      };
+      this.app.vault.on('modify', this._noticeVaultEvent);
+    }
+  }
+
+  applyNoticeState(state) {
+    const s = state || {};
+    const items = Array.isArray(s.items) ? s.items : [];
+    const last = Math.max(0, items.length - 1);
+    const active = Math.min(last, Math.max(0, parseInt(s.active, 10) || 0));
+    const idx = (key) => {
+      const v = s[key] != null ? parseInt(s[key], 10) : NaN;
+      return Math.min(last, Math.max(0, Number.isFinite(v) ? v : active));
+    };
+    this._notice = {
+      enabled: !!s.enabled, active,
+      activeTop: idx('activeTop'), activeBottom: idx('activeBottom'), items
+    };
+    this.renderNotice();
+  }
+
+  renderNotice() {
+    this.applyNoticeDivider();
+    const st = this._notice || { enabled: false, items: [] };
+    const settings = (this.plugin && this.plugin.settings) || {};
+    const mode = normalizeNoticeMode(settings.noticeMode);
+    this._noticeMode = mode;
+    if (this.noticeBtn && this.noticeBtn.classList) this.noticeBtn.classList.toggle('is-active', !!st.enabled);
+    const pairs = [
+      [this.noticeTopZoneEl, this.noticeTopResizerEl, mode === 'top' || mode === 'all', 'noticeTopZoneHeight'],
+      [this.noticeBottomZoneEl, this.noticeBottomResizerEl, mode === 'bottom' || mode === 'all', 'noticeBottomZoneHeight']
+    ];
+    const show = !!st.enabled && (st.items || []).length > 0;
+    for (const [zone, resizer, visible, key] of pairs) {
+      if (!zone) continue;
+      if (zone.classList) zone.classList.toggle('is-hidden', !(show && visible));
+      if (resizer && resizer.classList) resizer.classList.toggle('is-hidden', !(show && visible));
+      if (show && visible) {
+        const item = (st.items || [])[this.noticeActiveIndex(key === 'noticeTopZoneHeight' ? 'top' : 'bottom')];
+        this.fillNoticeTarget(zone, item);
+        // 高度只由 CSS 变量 --hymns-notice-*-h 驱动（见 styles.css），拖动分界线时立刻跟手。
+        // 管理面板现在是独立浮层，不再把区临时撑到 320px。
+      }
+    }
+    this.applyNoticeFontSize();
+    this.applyNoticeLayout();
+  }
+
+  fillNoticeTarget(zone, item) {
+    if (!zone) return;
+    if (zone.empty) zone.empty(); else zone.textContent = '';
+    const wrap = (this.docEl || document).createElement('div');
+    wrap.className = 'hymns-proj-notice-inner';
+    const title = (this.docEl || document).createElement('div');
+    title.className = 'hymns-proj-notice-title';
+    title.textContent = String((item && item.title) || '');
+    const body = (this.docEl || document).createElement('div');
+    body.className = 'hymns-proj-notice-body';
+    body.textContent = String((item && item.body) || '');
+    wrap.appendChild(title);
+    wrap.appendChild(body);
+    zone.appendChild(wrap);
+  }
+
+  applyNoticeFontSize() {
+    const s = (this.plugin && this.plugin.settings) || {};
+    const base = Math.max(16, parseInt(this.fontSize, 10) || 48);
+    const titleSize = normalizeNoticeFontSize(s.noticeTitleFontSize) || Math.max(26, Math.round(base * 0.8));
+    const bodySize = normalizeNoticeFontSize(s.noticeBodyFontSize) || Math.max(22, Math.round(base * 0.7));
+    for (const zone of [this.noticeTopZoneEl, this.noticeBottomZoneEl]) {
+      if (!zone || !zone.querySelectorAll) continue;
+      const title = zone.querySelectorAll('.hymns-proj-notice-title')[0];
+      const body = zone.querySelectorAll('.hymns-proj-notice-body')[0];
+      if (title && title.style) title.style.fontSize = titleSize + 'px';
+      if (body && body.style) body.style.fontSize = bodySize + 'px';
+    }
+  }
+
+  applyNoticeDivider() {
+    const w = normalizeNoticeDividerWidth((this.plugin && this.plugin.settings && this.plugin.settings.noticeDividerWidth));
+    try { this.el.style.setProperty('--hymns-notice-divider-w', w + 'px'); } catch (e) { /* ignore */ }
+  }
+
+  applyNoticeLayout() {
+    if (!this.el || !this.el.style) return;
+    // 工具条高度会跟着时钟字号 / 窄屏换行变化：通告区从工具条下沿开始，别压住搜索框。
+    // 62px 是工具条 8px 顶距 + 40px 按钮 + 余量，读不到高度时就用它。
+    let topOffset = 62;
+    try {
+      const th = this.toolsEl && this.toolsEl.offsetHeight ? this.toolsEl.offsetHeight : 0;
+      if (th > 0) topOffset = Math.max(62, Math.round(th) + 10);
+    } catch (e) { /* ignore */ }
+    try { this.el.style.setProperty('--hymns-notice-top-offset', topOffset + 'px'); } catch (e) { /* ignore */ }
+    const s = (this.plugin && this.plugin.settings) || {};
+    const mode = normalizeNoticeMode(s.noticeMode);
+    const show = !!(this._notice && this._notice.enabled && (this._notice.items || []).length);
+    const topH = (show && (mode === 'top' || mode === 'all')) ? normalizeNoticeZoneHeight(s.noticeTopZoneHeight) : 0;
+    const bottomH = (show && (mode === 'bottom' || mode === 'all')) ? normalizeNoticeZoneHeight(s.noticeBottomZoneHeight) : 0;
+    try {
+      this.el.style.setProperty('--hymns-notice-top-h', topH + 'px');
+      this.el.style.setProperty('--hymns-notice-bottom-h', bottomH + 'px');
+      // 舞台要让开的是「通告区整体占掉的高度」：顶部区从工具条下沿开始（不再从安全区顶部算），
+      // 底部区下沿离安全区还有底栏那 46px。只写 *-h 会让画布上移 62px 钻到通告文字里（截图里的重叠）。
+      this.el.style.setProperty('--hymns-notice-top-shift', topH ? (topOffset + topH) + 'px' : '0px');
+      this.el.style.setProperty('--hymns-notice-bottom-shift', bottomH ? (46 + bottomH) + 'px' : '0px');
+    } catch (e) { /* ignore */ }
+    this.scheduleFit();
+  }
+
+  noticeManagerZoneKey() {
+    return this._noticeManagerZone === this.noticeBottomZoneEl ? 'bottom' : 'top';
+  }
+  noticeActiveIndex(key) {
+    const st = this._notice || {};
+    const k = key === 'bottom' ? 'activeBottom' : 'activeTop';
+    let v = parseInt(st[k], 10);
+    if (!Number.isFinite(v) || v < 0) v = parseInt(st.active, 10) || 0;
+    return Math.min(Math.max(0, v), Math.max(0, (st.items || []).length - 1));
+  }
+  noticeActivePatch(active, key) {
+    return key === 'bottom'
+      ? { active: active, activeBottom: active, activeTop: this.noticeActiveIndex('top') }
+      : { active: active, activeTop: active, activeBottom: this.noticeActiveIndex('bottom') };
+  }
+
+  toggleNoticeEnabled() {
+    const cur = this._notice || { enabled: false };
+    const patch = Object.assign({ enabled: !cur.enabled }, this.noticeActivePatch(cur.active || 0, this.noticeManagerZoneKey()));
+    const plugin = this.plugin;
+    if (!plugin || typeof plugin.writeNoticeDoc !== 'function') return;
+    const r = plugin.writeNoticeDoc(patch, { source: 'hymns' });
+    if (r && typeof r.catch === 'function') r.catch(() => { /* ignore */ });
+  }
+
+  saveNoticeSettings() {
+    if (!this.plugin || typeof this.plugin.saveAll !== 'function') return;
+    const r = this.plugin.saveAll();
+    if (r && typeof r.catch === 'function') r.catch(() => { /* ignore */ });
+    // 设置改动同步给 Bible 端（Bible 端同样会把它的改动推过来）
+    if (typeof this.plugin.scheduleNoticeSettingsBroadcast === 'function') {
+      this.plugin.scheduleNoticeSettingsBroadcast({ source: 'hymns' });
+    }
+  }
+
+  // 另一端同步过来时，设置面板正开着就重画一遍，滑块 / 模式按钮跟着变。
+  // 用户正在面板输入框里打字就先不重画，免得把他的半截输入冲掉。
+  refreshNoticeSettingsUi() {
+    if (!this._settingsPanel || !this.settingsBtn) return;
+    const active = (typeof document !== 'undefined') ? document.activeElement : null;
+    if (active && this._settingsPanel.contains && this._settingsPanel.contains(active) &&
+        active.tagName === 'INPUT' && active.type !== 'range') return;
+    this.closeProjectionSettings();
+    this.showProjectionSettings(this.settingsBtn);
+  }
+
+  applyNoticeSetting(key, value, save) {
+    if (!this.plugin || !this.plugin.settings) return;
+    this.plugin.settings[key] = value;
+    if (key.indexOf('FontSize') >= 0 || key.indexOf('ZoneHeight') >= 0 || key === 'noticeDividerWidth') {
+      this.applyNoticeDivider();
+      this.applyNoticeFontSize();
+      this.applyNoticeLayout();
+    }
+    if (save !== false) this.saveNoticeSettings();
+  }
+
+  openNoticeManager(zone) {
+    if (!zone || !this.el || !this.el.createDiv) return;
+    this.closeProjectionSettings();
+    this.closeNoticeManager();
+    this._noticeManagerZone = zone;
+    const self = this;
+    const isBottom = zone === this.noticeBottomZoneEl;
+    // 管理界面以前挂在通告区内部：区是 overflow-y:auto 的半透明条，双向滚动与堆叠上下文
+    // 会互相打架（标题被工具条压住、正文从面板底下透出来、分界线横穿面板）。
+    // 现在改成投影层上的独立浮层：贴着对应通告区一侧展开、自身滚动，永远不透明。
+    const mgr = this.el.createDiv({
+      cls: 'hymns-proj-notice-manage ' + (isBottom ? 'is-bottom' : 'is-top')
+    });
+    mgr.addEventListener('click', (e) => { if (e && e.stopPropagation) e.stopPropagation(); });
+    mgr.addEventListener('dblclick', (e) => { if (e && e.stopPropagation) e.stopPropagation(); });
+    const head = mgr.createDiv({ cls: 'hymns-proj-notice-manage-head' });
+    head.createSpan({ cls: 'hymns-proj-notice-manage-title', text: isBottom ? '管理底部通告' : '管理顶部通告' });
+    const actions = head.createDiv({ cls: 'hymns-proj-notice-manage-actions' });
+    const addBtn = actions.createEl('button', { cls: 'hymns-proj-notice-add', text: '＋ 新增通告', attr: { type: 'button' } });
+    addBtn.addEventListener('click', (e) => { if (e && e.stopPropagation) e.stopPropagation(); self.addNoticeItem(); });
+    const doneBtn = actions.createEl('button', { cls: 'hymns-proj-notice-manage-done', text: '完成', attr: { type: 'button' } });
+    doneBtn.addEventListener('click', (e) => { if (e && e.stopPropagation) e.stopPropagation(); self.closeNoticeManager(); });
+    // 预览：固定小字号 + 限高滚动，正文再长也不会把面板撑成一堵墙
+    mgr.createDiv({ cls: 'hymns-proj-notice-preview' });
+    mgr.createDiv({ cls: 'hymns-proj-notice-list' });
+    this._noticeManagerEl = mgr;
+    this._noticePanelsOpen = true;
+    // 通告区本身保持用户设定的高度，只把区里的正常内容藏起来（面板就在它上方/下方）
+    if (zone.classList) zone.classList.add('is-managing');
+    this.fillNoticePanel();
+    this.bindNoticeOutsideClose();
+  }
+
+  closeNoticeManager() {
+    if (this._noticeManagerZone && this._noticeManagerZone.classList) {
+      this._noticeManagerZone.classList.remove('is-managing');
+    }
+    if (this._noticeManagerEl && this._noticeManagerEl.parentNode) {
+      try { this._noticeManagerEl.parentNode.removeChild(this._noticeManagerEl); } catch (e) { /* ignore */ }
+    }
+    this._noticeManagerEl = null;
+    this._noticeManagerZone = null;
+    this._noticePanelsOpen = false;
+    this._noticeEditingIndex = -1;
+    this._noticePreviewEl = null;
+    this.unbindNoticeOutsideClose();
+    this.renderNotice();
+  }
+
+  fillNoticePanel() {
+    const mgr = this._noticeManagerEl;
+    if (!mgr) return;
+    const list = mgr.querySelector ? mgr.querySelector('.hymns-proj-notice-list') : null;
+    if (!list) return;
+    this.updateNoticePreview();
+    if (list.empty) list.empty(); else list.textContent = '';
+    const items = (this._notice && this._notice.items) || [];
+    if (!items.length) { list.textContent = '（还没有通告，点上方「＋ 新增通告」添加）'; return; }
+    const self = this;
+    const key = this.noticeManagerZoneKey();
+    const activeIdx = this.noticeActiveIndex(key);
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      if (i === this._noticeEditingIndex) {
+        const form = (this.docEl || document).createElement('div');
+        form.className = 'hymns-proj-notice-item-form';
+        form.addEventListener('click', (e) => { if (e && e.stopPropagation) e.stopPropagation(); });
+        const titleInput = (this.docEl || document).createElement('input');
+        titleInput.className = 'hymns-proj-notice-item-title';
+        titleInput.type = 'text';
+        titleInput.value = String(it.title || '');
+        const bodyInput = (this.docEl || document).createElement('textarea');
+        bodyInput.className = 'hymns-proj-notice-item-body';
+        bodyInput.value = String(it.body || '');
+        bodyInput.rows = 5;
+        const headRow = (this.docEl || document).createElement('div');
+        headRow.className = 'hymns-proj-notice-edit-head';
+        headRow.appendChild(titleInput);
+        const save = (this.docEl || document).createElement('button');
+        save.className = 'hymns-proj-notice-save';
+        save.type = 'button';
+        save.textContent = '保存';
+        save.addEventListener('click', (e) => { if (e && e.stopPropagation) e.stopPropagation(); self.saveNoticeEdit(i); });
+        const cancel = (this.docEl || document).createElement('button');
+        cancel.className = 'hymns-proj-notice-cancel';
+        cancel.type = 'button';
+        cancel.textContent = '取消';
+        cancel.addEventListener('click', (e) => { if (e && e.stopPropagation) e.stopPropagation(); self._noticeEditingIndex = -1; self.fillNoticePanel(); });
+        headRow.appendChild(save);
+        headRow.appendChild(cancel);
+        form.appendChild(headRow);
+        form.appendChild(bodyInput);
+        const hint = (this.docEl || document).createElement('div');
+        hint.className = 'hymns-proj-notice-edit-hint';
+        hint.textContent = '正文按 Enter 换行';
+        form.appendChild(hint);
+        list.appendChild(form);
+        continue;
+      }
+      const row = (this.docEl || document).createElement('div');
+      row.className = 'hymns-proj-notice-item' + (i === activeIdx ? ' is-active' : '');
+      row.dataset.noticeIndex = String(i);
+      const prefix = (this.docEl || document).createElement('span');
+      prefix.className = 'hymns-proj-notice-item-prefix';
+      prefix.textContent = (i + 1) + '. ';
+      row.appendChild(prefix);
+      const label = (this.docEl || document).createElement('span');
+      label.className = 'hymns-proj-notice-item-label';
+      label.textContent = String(it.title || '未命名通告');
+      row.appendChild(label);
+      const ops = (this.docEl || document).createElement('span');
+      ops.className = 'hymns-proj-notice-item-ops';
+      const edit = (this.docEl || document).createElement('button');
+      edit.className = 'hymns-proj-notice-item-edit';
+      edit.type = 'button';
+      edit.textContent = '✎';
+      edit.title = '编辑这条通告';
+      edit.addEventListener('click', (e) => {
+        if (e && e.stopPropagation) e.stopPropagation();
+        self._noticeEditingIndex = i;
+        self.fillNoticePanel();
+      });
+      const del = (this.docEl || document).createElement('button');
+      del.className = 'hymns-proj-notice-item-del';
+      del.type = 'button';
+      del.textContent = '🗑';
+      del.title = '删除这条通告';
+      del.addEventListener('click', (e) => {
+        if (e && e.stopPropagation) e.stopPropagation();
+        self.deleteNoticeItem(i);
+      });
+      ops.appendChild(edit);
+      ops.appendChild(del);
+      row.appendChild(ops);
+      row.addEventListener('click', (e) => {
+        if (e && e.stopPropagation) e.stopPropagation();
+        self._noticeLastClickedIndex = i;
+        const patch = self.noticeActivePatch(i, key);
+        if (self._notice) Object.assign(self._notice, patch);
+        self.syncNoticePanelActive();
+        self.updateNoticePreview();
+        const plugin = self.plugin;
+        if (!plugin || typeof plugin.writeNoticeDoc !== 'function') return;
+        const r = plugin.writeNoticeDoc(patch, { source: 'hymns' });
+        if (r && typeof r.catch === 'function') r.catch(() => { /* ignore */ });
+      });
+      row.addEventListener('dblclick', (e) => {
+        if (e && e.stopPropagation) e.stopPropagation();
+        self._noticeEditingIndex = i;
+        self.fillNoticePanel();
+      });
+      list.appendChild(row);
+    }
+  }
+
+  syncNoticePanelActive() {
+    const mgr = this._noticeManagerEl;
+    if (!mgr || !mgr.querySelectorAll) return;
+    const idx = this.noticeActiveIndex(this.noticeManagerZoneKey());
+    for (const row of mgr.querySelectorAll('.hymns-proj-notice-item')) {
+      if (row.classList) row.classList.toggle('is-active', Number(row.dataset.noticeIndex) === idx);
+    }
+    this.updateNoticePreview();
+  }
+
+  updateNoticePreview() {
+    const mgr = this._noticeManagerEl;
+    if (!mgr || !mgr.querySelector) return;
+    const el = mgr.querySelector('.hymns-proj-notice-preview');
+    if (!el) return;
+    this._noticePreviewEl = el;
+    const idx = this.noticeActiveIndex(this.noticeManagerZoneKey());
+    const item = ((this._notice && this._notice.items) || [])[idx];
+    if (el.empty) el.empty(); else el.textContent = '';
+    if (!item) return;
+    const title = (this.docEl || document).createElement('div');
+    title.className = 'hymns-proj-notice-preview-title';
+    title.textContent = String(item.title || '');
+    const body = (this.docEl || document).createElement('div');
+    body.className = 'hymns-proj-notice-preview-body';
+    body.textContent = String(item.body || '');
+    el.appendChild(title);
+    el.appendChild(body);
+  }
+
+  refreshNoticePanel() { if (this._noticePanelsOpen) this.fillNoticePanel(); }
+
+  commitNoticeItems(items, active, key) {
+    const st = this._notice || {};
+    const state = Object.assign({
+      enabled: !!st.enabled,
+      items: Array.isArray(items) ? items : []
+    }, this.noticeActivePatch(active, key));
+    this.applyNoticeState(state);
+    const plugin = this.plugin;
+    if (!plugin || typeof plugin.writeNoticeDoc !== 'function') return;
+    const r = plugin.writeNoticeDoc(state, { source: 'hymns' });
+    if (r && typeof r.catch === 'function') r.catch(() => { /* ignore */ });
+  }
+
+  saveNoticeEdit(index) {
+    const form = this._noticeManagerEl && this._noticeManagerEl.querySelector('.hymns-proj-notice-item-form');
+    if (!form) return;
+    const items = ((this._notice && this._notice.items) || []).slice();
+    const titleEl = form.querySelector ? form.querySelector('.hymns-proj-notice-item-title') : null;
+    const bodyEl = form.querySelector ? form.querySelector('.hymns-proj-notice-item-body') : null;
+    if (!items[index]) return;
+    items[index] = {
+      title: String((titleEl && titleEl.value) || '未命名通告'),
+      body: String((bodyEl && bodyEl.value) || '')
+    };
+    this._noticeEditingIndex = -1;
+    this.commitNoticeItems(items, index, this.noticeManagerZoneKey());
+  }
+
+  deleteNoticeItem(index) {
+    const items = ((this._notice && this._notice.items) || []).filter((it, i) => i !== index);
+    if (!items.length) { try { new Notice('至少保留一条通告'); } catch (e) { /* ignore */ } return; }
+    this._noticeEditingIndex = -1;
+    const active = Math.min(this.noticeActiveIndex(this.noticeManagerZoneKey()), items.length - 1);
+    this.commitNoticeItems(items, active, this.noticeManagerZoneKey());
+  }
+
+  addNoticeItem() {
+    const items = ((this._notice && this._notice.items) || []).slice();
+    items.push({ title: '新通告', body: '' });
+    const active = items.length - 1;
+    this._noticeEditingIndex = active;
+    this.commitNoticeItems(items, active, this.noticeManagerZoneKey());
+  }
+
+  /* 点通告区 / 管理面板以外收起管理界面 */
+  bindNoticeOutsideClose() {
+    if (this._noticeOutside || typeof document === 'undefined') return;
+    this._noticeOutside = (e) => {
+      if (this._closed || !this._noticePanelsOpen) return;
+      const t = e && e.target;
+      if (t && this._noticeManagerEl && typeof this._noticeManagerEl.contains === 'function' && this._noticeManagerEl.contains(t)) return;
+      if (t && this.noticeTopZoneEl && typeof this.noticeTopZoneEl.contains === 'function' && this.noticeTopZoneEl.contains(t)) return;
+      if (t && this.noticeBottomZoneEl && typeof this.noticeBottomZoneEl.contains === 'function' && this.noticeBottomZoneEl.contains(t)) return;
+      this.closeNoticeManager();
+    };
+    this._noticeOutsideEvents = [[document, 'pointerdown', true], [document, 'click', true]];
+    const self = this;
+    setTimeout(() => {
+      if (self._closed || !self._noticeOutside || !self._noticeOutsideEvents) return;
+      for (const [target, type, capture] of self._noticeOutsideEvents) {
+        try { target.addEventListener(type, self._noticeOutside, capture); } catch (e) { /* ignore */ }
+      }
+    }, 0);
+  }
+
+  unbindNoticeOutsideClose() {
+    if (!this._noticeOutside || !this._noticeOutsideEvents || typeof document === 'undefined') return;
+    for (const [target, type, capture] of this._noticeOutsideEvents) {
+      try { target.removeEventListener(type, this._noticeOutside, capture); } catch (e) { /* ignore */ }
+    }
+    this._noticeOutside = null;
+    this._noticeOutsideEvents = null;
+  }
+
+  /* 投影设置面板：模式 / 文件夹 / 高度 / 字号 / 分界线，全部挂投影层内部 */
+  showProjectionSettings(anchorEl) {
+    if (this._settingsPanel) return;
+    this.closeNoticeManager();
+    const host = this.el;
+    if (!host || !host.createDiv) return;
+    const self = this;
+    const s = (this.plugin && this.plugin.settings) || {};
+    const panel = host.createDiv({ cls: 'hymns-proj-settings-panel' });
+    panel.addEventListener('click', (e) => { if (e && e.stopPropagation) e.stopPropagation(); });
+    panel.createDiv({ cls: 'hymns-proj-settings-title', text: '投影设置' });
+
+    // 时间：显示时间 / 显示秒数 / 时间字号（与 Bible 投影同名同默认值，改完立即生效）
+    const timeGroup = panel.createDiv({ cls: 'hymns-proj-settings-group' });
+    timeGroup.createDiv({ cls: 'hymns-proj-settings-group-title', text: '时间' });
+    const applyClock = (key, value) => {
+      if (!self.plugin || !self.plugin.settings) return;
+      self.plugin.settings[key] = value;
+      self.refreshProjectionClock();
+      // 时钟字号会改变工具条高度 → 通告区起点跟着让位
+      if (typeof self.applyNoticeLayout === 'function') self.applyNoticeLayout();
+      self.saveNoticeSettings();
+    };
+    const addClockCheck = (key, label, checked) => {
+      const row = timeGroup.createDiv({ cls: 'hymns-proj-settings-row hymns-proj-settings-clickable' });
+      row.createSpan({ cls: 'hymns-proj-settings-row-label', text: label });
+      const ctrl = row.createDiv({ cls: 'hymns-proj-settings-ctrl' });
+      const cb = ctrl.createEl('input', { cls: 'hymns-proj-settings-check', attr: { type: 'checkbox', 'aria-label': label, title: label } });
+      cb.checked = !!checked;
+      // 复选框只作视觉指示（CSS pointer-events:none）：整行点击统一翻转，避免原生勾选与手动翻转打架
+      row.addEventListener('click', (e) => {
+        if (e && e.stopPropagation) e.stopPropagation();
+        cb.checked = !cb.checked;
+        applyClock(key, !!cb.checked);
+      });
+      return cb;
+    };
+    addClockCheck('projectionClockEnabled', '显示时间', s.projectionClockEnabled !== false);
+    addClockCheck('projectionClockSeconds', '显示秒数', !!s.projectionClockSeconds);
+    const clockSize = normalizeProjectionClockFontSize(s.projectionClockFontSize);
+    const clockRow = timeGroup.createDiv({ cls: 'hymns-proj-settings-row' });
+    clockRow.createSpan({ cls: 'hymns-proj-settings-row-label', text: '时间字号' });
+    const clockCtrl = clockRow.createDiv({ cls: 'hymns-proj-settings-ctrl' });
+    const clockRange = clockCtrl.createEl('input', {
+      cls: 'hymns-proj-settings-range',
+      attr: { type: 'range', min: '16', max: '96', step: '2', title: '时间字号（16–96px）', 'aria-label': '时间字号' }
+    });
+    clockRange.value = String(clockSize);
+    const clockVal = clockCtrl.createSpan({ cls: 'hymns-proj-settings-value', text: clockSize + ' px' });
+    clockRange.addEventListener('input', () => {
+      const n = normalizeProjectionClockFontSize(clockRange.value);
+      clockVal.textContent = n + ' px';
+      applyClock('projectionClockFontSize', n);
+    });
+
+    const group = panel.createDiv({ cls: 'hymns-proj-settings-group' });
+    group.createDiv({ cls: 'hymns-proj-settings-group-title', text: '投影通告' });
+
+    // 模式：顶部 / 底部 / 全选
+    const modeRow = group.createDiv({ cls: 'hymns-proj-settings-row' });
+    modeRow.createSpan({ cls: 'hymns-proj-settings-row-label', text: '通告模式' });
+    const modeCtrl = modeRow.createDiv({ cls: 'hymns-proj-settings-mode-ctrl' });
+    const modeBtns = {};
+    const currentMode = normalizeNoticeMode(s.noticeMode);
+    for (const m of NOTICE_MODES) {
+      const label = m === 'all' ? '全选' : (m === 'top' ? '顶部' : '底部');
+      const btn = modeCtrl.createEl('button', {
+        cls: 'hymns-proj-settings-mode-btn' + (m === currentMode ? ' is-active' : ''),
+        text: label, attr: { type: 'button', title: label + '通告区' }
+      });
+      btn.addEventListener('click', (e) => {
+        if (e && e.stopPropagation) e.stopPropagation();
+        if (!self.plugin || !self.plugin.settings) return;
+        self.plugin.settings.noticeMode = m;
+        for (const k of NOTICE_MODES) {
+          if (modeBtns[k] && modeBtns[k].classList) modeBtns[k].classList.toggle('is-active', k === m);
+        }
+        self.saveNoticeSettings();
+        self.renderNotice();
+      });
+      modeBtns[m] = btn;
+    }
+
+    // 通告文件夹：留空＝根目录。输入不会直接搬文件，必须点「确定」（Enter 等同确定）；
+    // 「取消」把输入框还原成当前实际位置。以前是停手 700ms / 关面板就自动提交，
+    // 改一半就被搬走、想反悔也没机会——现在改成显式确认。
+    const folderRow = group.createDiv({ cls: 'hymns-proj-settings-row' });
+    folderRow.createSpan({ cls: 'hymns-proj-settings-row-label', text: '通告文件夹' });
+    const folderCtrl = folderRow.createDiv({ cls: 'hymns-proj-settings-folder-ctrl' });
+    const folderInputWrap = folderCtrl.createDiv({ cls: 'hymns-proj-settings-folder-input-wrap' });
+    const folderInput = folderInputWrap.createEl('input', {
+      cls: 'hymns-proj-settings-folder-input',
+      attr: {
+        type: 'text', placeholder: '根目录（留空）', spellcheck: 'false',
+        title: '通告文件夹（文件名固定 bible-notice.md，留空＝仓库根目录）', 'aria-label': '通告文件夹'
+      }
+    });
+    const currentFolder = () => (self.plugin && typeof self.plugin.noticeFolder === 'function')
+      ? self.plugin.noticeFolder() : normalizeNoticeFolder(s.noticeFolder);
+    folderInput.value = currentFolder();
+    const folderBtns = folderCtrl.createDiv({ cls: 'hymns-proj-settings-folder-btns' });
+    const folderOkBtn = folderBtns.createEl('button', {
+      cls: 'hymns-proj-settings-folder-ok', text: '确定',
+      attr: { type: 'button', title: '按这个文件夹保存，并搬移通告文件' }
+    });
+    const folderCancelBtn = folderBtns.createEl('button', {
+      cls: 'hymns-proj-settings-folder-cancel', text: '取消',
+      attr: { type: 'button', title: '放弃修改，保持当前文件夹' }
+    });
+    // 输入框右端的一键清空：只清值（＝仓库根目录），还要按「确定」才生效
+    const folderClearBtn = folderInputWrap.createEl('button', {
+      cls: 'hymns-proj-settings-folder-clear is-hidden',
+      attr: { type: 'button', title: '清空（＝仓库根目录），再按「确定」生效', 'aria-label': '清空通告文件夹' }
+    });
+    try { setIcon(folderClearBtn, 'x'); } catch (e) { folderClearBtn.textContent = '✕'; }
+    // 按下时别把焦点从输入框抢走（否则刚选中的文字会丢）
+    folderClearBtn.addEventListener('pointerdown', (e) => { if (e && e.preventDefault) e.preventDefault(); });
+    const syncFolderClear = () => {
+      if (!folderClearBtn || !folderClearBtn.classList) return;
+      folderClearBtn.classList.toggle('is-hidden', !String(folderInput.value || '').trim());
+    };
+    const setFolderValue = (v) => {
+      folderInput.value = String(v == null ? '' : v);
+      syncFolderClear();
+    };
+    syncFolderClear();
+    folderClearBtn.addEventListener('click', (e) => {
+      if (e && e.stopPropagation) e.stopPropagation();
+      setFolderValue('');
+      self.hideFolderOptions();
+      self.showFolderOptions(folderInput);
+      try { folderInput.focus(); } catch (err) { /* ignore */ }
+    });
+    // 「确定」兼作状态灯：移动中… → ✓ 已保存 / ✗ 失败，1.6 秒后回「确定」
+    let folderOkTimer = null;
+    const flashFolderOk = (state, text) => {
+      if (!folderOkBtn || !folderOkBtn.classList) return;
+      if (folderOkTimer) { clearTimeout(folderOkTimer); folderOkTimer = null; }
+      folderOkBtn.classList.remove('is-ok', 'is-fail', 'is-busy');
+      if (state) folderOkBtn.classList.add('is-' + state);
+      folderOkBtn.textContent = text || '确定';
+      folderOkBtn.disabled = state === 'busy';
+      if (state !== 'ok' && state !== 'fail') return;
+      folderOkTimer = setTimeout(() => {
+        folderOkTimer = null;
+        if (!folderOkBtn || !folderOkBtn.classList) return;
+        folderOkBtn.classList.remove('is-ok', 'is-fail', 'is-busy');
+        folderOkBtn.disabled = false;
+        folderOkBtn.textContent = '确定';
+      }, 1600);
+    };
+    let folderBusy = false;
+    const commitFolder = () => {
+      if (!self.plugin || folderBusy) return;
+      self.hideFolderOptions();
+      const nf = normalizeNoticeFolder(folderInput.value);
+      const old = currentFolder();
+      // 输入没变：不搬文件，但也要给个「已保存」的回执，免得以为没点上
+      if (nf === old) { setFolderValue(old); flashFolderOk('ok', '✓ 已保存'); return; }
+      const r = typeof self.plugin.migrateNoticeDoc === 'function' ? self.plugin.migrateNoticeDoc(old, nf) : null;
+      if (!r || typeof r.then !== 'function') return;
+      folderBusy = true;
+      flashFolderOk('busy', '移动中…');
+      r.then((res) => {
+        folderBusy = false;
+        if (res && res.ok === false) {
+          const why = res.reason === 'target-exists' ? '目标文件夹已有同名文件' : String((res && res.reason) || '未知原因');
+          flashFolderOk('fail', '✗ 失败');
+          try { new Notice('移动通告文件失败：' + why); } catch (e) { /* ignore */ }
+          setFolderValue(old);
+          return;
+        }
+        self.plugin.settings.noticeFolder = nf;
+        setFolderValue(nf);
+        flashFolderOk('ok', '✓ 已保存');
+        self.saveNoticeSettings();
+        try {
+          new Notice('通告文件夹已更新为' + (nf ? '「' + nf + '」' : '仓库根目录') +
+            (res && res.backup ? '；目标处原有的同名文件已备份为 ' + res.backup : ''));
+        } catch (e) { /* ignore */ }
+        if (typeof self.plugin.readNoticeDoc === 'function') {
+          const p = self.plugin.readNoticeDoc(false);
+          if (p && typeof p.then === 'function') p.then(st => self.applyNoticeState(st)).catch(() => { /* ignore */ });
+        }
+      }).catch(() => { folderBusy = false; flashFolderOk('fail', '✗ 失败'); });
+    };
+    const cancelFolder = () => {
+      self.hideFolderOptions();
+      setFolderValue(currentFolder());
+    };
+    folderOkBtn.addEventListener('click', (e) => {
+      if (e && e.stopPropagation) e.stopPropagation();
+      commitFolder();
+    });
+    folderCancelBtn.addEventListener('click', (e) => {
+      if (e && e.stopPropagation) e.stopPropagation();
+      cancelFolder();
+    });
+    // 输入只更新候选列表，不提交
+    folderInput.addEventListener('input', () => { syncFolderClear(); self.showFolderOptions(folderInput); });
+    folderInput.addEventListener('focus', () => self.showFolderOptions(folderInput));
+    folderInput.addEventListener('keydown', (e) => {
+      if (!e || (e.key !== 'Enter' && e.key !== 'Escape')) return;
+      if (e.preventDefault) e.preventDefault();
+      if (e.stopPropagation) e.stopPropagation();
+      if (e.key === 'Enter') commitFolder(); else cancelFolder();
+    });
+
+    // 高度 / 字号 / 分界线滑条
+    const base = Math.max(16, parseInt(this.fontSize, 10) || 48);
+    this.addSettingRangeRow(group, '顶部区高度', 'noticeTopZoneHeight', 40, 360, 1,
+      normalizeNoticeZoneHeight(s.noticeTopZoneHeight), 'px');
+    this.addSettingRangeRow(group, '底部区高度', 'noticeBottomZoneHeight', 40, 360, 1,
+      normalizeNoticeZoneHeight(s.noticeBottomZoneHeight), 'px');
+    this.addSettingRangeRow(group, '公告标题字号', 'noticeTitleFontSize', 12, 96, 1,
+      normalizeNoticeFontSize(s.noticeTitleFontSize) || Math.max(26, Math.round(base * 0.8)), 'px',
+      normalizeNoticeFontSize(s.noticeTitleFontSize) == null);
+    this.addSettingRangeRow(group, '公告正文字号', 'noticeBodyFontSize', 12, 96, 1,
+      normalizeNoticeFontSize(s.noticeBodyFontSize) || Math.max(22, Math.round(base * 0.7)), 'px',
+      normalizeNoticeFontSize(s.noticeBodyFontSize) == null);
+    this.addSettingRangeRow(group, '分界线粗细', 'noticeDividerWidth', 1, 12, 1,
+      normalizeNoticeDividerWidth(s.noticeDividerWidth), 'px');
+
+    this._settingsPanel = panel;
+    host.appendChild(panel);
+    this.bindSettingsOutsideClose(anchorEl);
+  }
+
+  addSettingRangeRow(group, label, key, min, max, step, initial, suffix, auto) {
+    const row = group.createDiv({ cls: 'hymns-proj-settings-row' });
+    row.createSpan({ cls: 'hymns-proj-settings-row-label', text: label });
+    const ctrl = row.createDiv({ cls: 'hymns-proj-settings-ctrl' });
+    const range = ctrl.createEl('input', {
+      cls: 'hymns-proj-settings-range',
+      attr: { type: 'range', min: String(min), max: String(max), step: String(step), title: label + '（' + min + '–' + max + '）', 'aria-label': label }
+    });
+    range.value = String(initial);
+    const val = ctrl.createSpan({ cls: 'hymns-proj-settings-value', text: auto ? '自动' : initial + ' ' + (suffix || 'px') });
+    const self = this;
+    range.addEventListener('input', () => {
+      const n = Number(range.value);
+      val.textContent = n + ' ' + (suffix || 'px');
+      self.applyNoticeSetting(key, n, false);
+    });
+    range.addEventListener('change', () => self.saveNoticeSettings());
+    ctrl.appendChild(range);
+    ctrl.appendChild(val);
+    if (auto) {
+      const autoBtn = ctrl.createEl('button', {
+        cls: 'hymns-proj-settings-auto', text: '自动',
+        attr: { type: 'button', title: '恢复自动（跟随投影字号）' }
+      });
+      autoBtn.addEventListener('click', (e) => {
+        if (e && e.stopPropagation) e.stopPropagation();
+        val.textContent = '自动';
+        range.value = String(initial);
+        self.applyNoticeSetting(key, null);
+      });
+      ctrl.appendChild(autoBtn);
+    }
+    this._settingsRangeEls = this._settingsRangeEls || {};
+    this._settingsValueEls = this._settingsValueEls || {};
+    this._settingsRangeEls[key] = range;
+    this._settingsValueEls[key] = val;
+    return row;
+  }
+
+  closeProjectionSettings() {
+    // 文件夹改动只认「确定」：关面板不算确认，输入框里的半截值直接丢掉（下次打开回到实际位置）
+    this._noticeFolderCommit = null;
+    this.hideFolderOptions();
+    this.unbindSettingsOutsideClose();
+    if (this._settingsPanel && this._settingsPanel.parentNode) {
+      try { this._settingsPanel.parentNode.removeChild(this._settingsPanel); } catch (e) { /* ignore */ }
+    }
+    this._settingsPanel = null;
+    this._settingsRangeEls = null;
+    this._settingsValueEls = null;
+  }
+
+  bindSettingsOutsideClose(anchorEl) {
+    if (this._settingsOutside || typeof document === 'undefined') return;
+    // 从面板里按下、在面板外松开（拉选文字 / 拖滑条）时，浏览器会把 click 派发到
+    // 两者的共同祖先——也就是面板外。这种 click 是那次手势的尾巴，不能当成「点了外面」。
+    // 所以只认手势起点：pointerdown 落在面板里，则随后的 click 一律放过。
+    this._settingsPressInside = false;
+    this._settingsOutside = (e) => {
+      if (this._closed || !this._settingsPanel) return;
+      const t = e && e.target;
+      const inside = !!(t && this._settingsPanel.contains && this._settingsPanel.contains(t));
+      const inAnchor = !!(t && anchorEl && anchorEl.contains && anchorEl.contains(t));
+      const isPointerDown = !!(e && e.type === 'pointerdown');
+      if (isPointerDown) {
+        this._settingsPressInside = inside || inAnchor;
+        if (inside || inAnchor) return;
+        if (t && this._folderOptionsEl && this._folderOptionsEl.contains && this._folderOptionsEl.contains(t)) {
+          this.hideFolderOptions();
+          return;
+        }
+        this.closeProjectionSettings();
+        return;
+      }
+      if (inside || inAnchor) return;
+      if (this._settingsPressInside) return;
+      if (t && this._folderOptionsEl && this._folderOptionsEl.contains && this._folderOptionsEl.contains(t)) {
+        this.hideFolderOptions();
+        return;
+      }
+      this.closeProjectionSettings();
+    };
+    this._settingsOutsideEvents = [[document, 'pointerdown', true], [document, 'click', true]];
+    const self = this;
+    setTimeout(() => {
+      if (self._closed || !self._settingsOutside || !self._settingsOutsideEvents) return;
+      for (const [target, type, capture] of self._settingsOutsideEvents) {
+        try { target.addEventListener(type, self._settingsOutside, capture); } catch (e) { /* ignore */ }
+      }
+    }, 0);
+  }
+
+  unbindSettingsOutsideClose() {
+    if (!this._settingsOutside || !this._settingsOutsideEvents || typeof document === 'undefined') return;
+    for (const [target, type, capture] of this._settingsOutsideEvents) {
+      try { target.removeEventListener(type, this._settingsOutside, capture); } catch (e) { /* ignore */ }
+    }
+    this._settingsOutside = null;
+    this._settingsOutsideEvents = null;
+  }
+
+  /* 通告文件夹候选：列出 Vault 顶层文件夹，点选即填入 */
+  showFolderOptions(input) {
+    this.hideFolderOptions();
+    if (!input || !input.parentNode || typeof document === 'undefined') return;
+    const self = this;
+    // 取文件夹列表是异步的，而 focus / input / 清空按钮可能在同一个 tick 里连着调两次。
+    // 用递增序号作废旧请求：只有最后一次能插弹框。否则旧回调会在之后又插一份，
+    // 那份没被 _folderOptionsEl 跟踪，hideFolderOptions 删不到 —— 弹窗就永远关不掉了。
+    const token = (this._folderOptionsToken || 0) + 1;
+    this._folderOptionsToken = token;
+    const vault = this.app && this.app.vault;
+    const adapter = vault && vault.adapter;
+    // 候选来自整个仓库（不只一级目录）：vault.getAllFolders 最省事，没有就退回 adapter.list
+    const listAll = () => {
+      const out = [''];
+      if (vault && typeof vault.getAllFolders === 'function') {
+        try {
+          for (const f of vault.getAllFolders()) if (f && f.path) out.push(String(f.path));
+        } catch (e) { /* ignore */ }
+        return Promise.resolve(out);
+      }
+      if (adapter && typeof adapter.list === 'function') {
+        return adapter.list('').then((res) => {
+          for (const d of ((res && res.folders) || [])) out.push(String(d).replace(/\/$/, ''));
+          return out;
+        }).catch(() => out);
+      }
+      return Promise.resolve(out);
+    };
+    listAll().then((folders) => {
+      if (self._closed || !input.parentNode) return;
+      if (self._folderOptionsToken !== token) return;
+      const q = normalizeNoticeFolder(input.value).toLowerCase();
+      const hits = folders
+        .filter((p) => p === '' || !q || p.toLowerCase().indexOf(q) >= 0)
+        .sort()
+        .slice(0, 40);
+      if (!hits.length) return;
+      // 兜底：万一之前有一份失联的弹框还挂在面板里（旧版本留下的），先清掉
+      const host = input.parentNode;
+      const stray = (host && typeof host.querySelectorAll === 'function')
+        ? host.querySelectorAll('.hymns-proj-folder-options') : [];
+      for (const old of stray) {
+        try { if (old.parentNode) old.parentNode.removeChild(old); } catch (e) { /* ignore */ }
+      }
+      const wrap = (self.docEl || document).createElement('div');
+      wrap.className = 'hymns-proj-folder-options';
+      for (const f of hits) {
+        const opt = (self.docEl || document).createElement('div');
+        opt.className = 'hymns-proj-folder-option';
+        opt.textContent = f || '（根目录）';
+        opt.addEventListener('pointerdown', (e) => { if (e && e.preventDefault) e.preventDefault(); });
+        opt.addEventListener('click', (e) => {
+          if (e && e.stopPropagation) e.stopPropagation();
+          // 点候选只填入输入框，不直接搬文件：还得按「确定」才算数
+          input.value = f;
+          self.hideFolderOptions();
+        });
+        wrap.appendChild(opt);
+      }
+      input.parentNode.appendChild(wrap);
+      self._folderOptionsEl = wrap;
+      self._folderPressInside = false;
+      self._folderOutside = (e) => {
+        const t = e && e.target;
+        const inWrap = t === input || !!(wrap.contains && wrap.contains(t));
+        if (e && e.type === 'pointerdown') {
+          self._folderPressInside = inWrap;
+          if (inWrap) return;
+          self.hideFolderOptions();
+          return;
+        }
+        if (inWrap) return;
+        // 从输入框里往外拖选，松手在框外时不该把候选收掉
+        if (self._folderPressInside) return;
+        self.hideFolderOptions();
+      };
+      self._folderOutsideEvents = [[document, 'pointerdown', true], [document, 'click', true]];
+      setTimeout(() => {
+        if (!self._folderOutside || !self._folderOutsideEvents) return;
+        for (const [target, type, capture] of self._folderOutsideEvents) {
+          try { target.addEventListener(type, self._folderOutside, capture); } catch (e) { /* ignore */ }
+        }
+      }, 0);
+    }).catch(() => { /* ignore */ });
+  }
+
+  hideFolderOptions() {
+    // 加一档序号：正在路上的那次 showFolderOptions 回调见到序号变了就不再插弹框
+    this._folderOptionsToken = (this._folderOptionsToken || 0) + 1;
+    if (this._folderOutside && this._folderOutsideEvents && typeof document !== 'undefined') {
+      for (const [target, type, capture] of this._folderOutsideEvents) {
+        try { target.removeEventListener(type, this._folderOutside, capture); } catch (e) { /* ignore */ }
+      }
+    }
+    this._folderOutside = null;
+    this._folderOutsideEvents = null;
+    if (this._folderOptionsEl && this._folderOptionsEl.parentNode) {
+      try { this._folderOptionsEl.parentNode.removeChild(this._folderOptionsEl); } catch (e) { /* ignore */ }
+    }
+    this._folderOptionsEl = null;
+  }
+
+  destroyNotice() {
+    this._noticeFolderCommit = null;
+    this.unbindNoticeOutsideClose();
+    this.unbindSettingsOutsideClose();
+    this.hideFolderOptions();
+    if (this._settingsPanel && this._settingsPanel.parentNode) {
+      try { this._settingsPanel.parentNode.removeChild(this._settingsPanel); } catch (e) { /* ignore */ }
+    }
+    this._settingsPanel = null;
+    if (this._noticeManagerEl && this._noticeManagerEl.parentNode) {
+      try { this._noticeManagerEl.parentNode.removeChild(this._noticeManagerEl); } catch (e) { /* ignore */ }
+    }
+    this._noticeManagerEl = null;
+    if (typeof document !== 'undefined') {
+      if (this._noticeEvent) { try { document.removeEventListener(NOTICE_STATE_EVENT, this._noticeEvent); } catch (e) { /* ignore */ } this._noticeEvent = null; }
+      if (this._noticePathEvent) { try { document.removeEventListener(NOTICE_PATH_EVENT, this._noticePathEvent); } catch (e) { /* ignore */ } this._noticePathEvent = null; }
+      if (this._noticeSettingsEvent) { try { document.removeEventListener(NOTICE_SETTINGS_EVENT, this._noticeSettingsEvent); } catch (e) { /* ignore */ } this._noticeSettingsEvent = null; }
+    }
+    if (this._noticeVaultEvent && this.app && this.app.vault && typeof this.app.vault.off === 'function') {
+      try { this.app.vault.off('modify', this._noticeVaultEvent); } catch (e) { /* ignore */ }
+      this._noticeVaultEvent = null;
+    }
+  }
+
   close() {
     if (this._closed) return;
     this._closed = true;
+    this.destroyNotice();          // 通告事件 / 面板监听逐条注销
     this.closeProjectionPanel();   // 历史 / 播放列表面板别留在已移除的投影层上
     const d = this.docEl;
     // 被经文投影请走、且本层此刻确实占着整屏：DOM 摘除必须延后（见下方说明）。
@@ -4383,6 +5613,7 @@ class HymnProjection {
     clearTimeout(this._idleTimer);
     clearTimeout(this._resizeTimer);
     clearTimeout(this._projSearchTimer);
+    if (this._clockTimer) { clearTimeout(this._clockTimer); this._clockTimer = null; }
     if (this.suggestEl) { try { this.suggestEl.style.display = 'none'; } catch (e) { /* ignore */ } }
     this._projResults = null;
     this._projLastQuery = '';
@@ -6839,8 +8070,31 @@ class HymnsPlugin extends Plugin {
       autoCheckUpdate: true, // 每次启动 Obsidian 都自动检测一次更新
       lastVersion: '',       // 上次已记录的版本号，用于判断「是否升级」并弹更新说明
       dismissedVersion: '',  // 用户点「稍后」的版本号，避免重复打扰
-      lastUpdateCheckAt: 0   // 上次检查更新的时间戳（毫秒），用于节流
+      lastUpdateCheckAt: 0,  // 上次检查更新的时间戳（毫秒），用于节流
+      // 投影通告：与 Bible search and reader 共用 bible-notice.md，位置变更两端同步
+      noticeFolder: '',
+      noticeMode: 'top',
+      noticeTopZoneHeight: 120,
+      noticeBottomZoneHeight: 120,
+      noticeDividerWidth: 2,
+      noticeTitleFontSize: null,   // null = 跟随投影字号
+      noticeBodyFontSize: null,
+      // 顶栏时钟：与 Bible 投影同一套字段名与默认值
+      projectionClockEnabled: true,
+      projectionClockSeconds: false,
+      projectionClockFontSize: 40
     }, data.settings || {});
+    // 通告设置归一化（旧 data.json 里没有这些字段时给默认值）
+    this.settings.noticeFolder = normalizeNoticeFolder(this.settings.noticeFolder);
+    this.settings.noticeMode = normalizeNoticeMode(this.settings.noticeMode);
+    this.settings.noticeTopZoneHeight = normalizeNoticeZoneHeight(this.settings.noticeTopZoneHeight);
+    this.settings.noticeBottomZoneHeight = normalizeNoticeZoneHeight(this.settings.noticeBottomZoneHeight);
+    this.settings.noticeDividerWidth = normalizeNoticeDividerWidth(this.settings.noticeDividerWidth);
+    this.settings.noticeTitleFontSize = normalizeNoticeFontSize(this.settings.noticeTitleFontSize);
+    this.settings.noticeBodyFontSize = normalizeNoticeFontSize(this.settings.noticeBodyFontSize);
+    this.settings.projectionClockFontSize = normalizeProjectionClockFontSize(this.settings.projectionClockFontSize);
+    this.settings.projectionClockEnabled = this.settings.projectionClockEnabled !== false;
+    this.settings.projectionClockSeconds = !!this.settings.projectionClockSeconds;
     this.playlists = data.playlists || [];
     this.removedBuiltinIds = data.removedBuiltinIds || [];
     // 启动时也按当前上限裁剪一次：改小设置后遗留的旧记录不会一直挂着
@@ -6892,6 +8146,8 @@ class HymnsPlugin extends Plugin {
     if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
       document.addEventListener('hymns:projection-close', this._onProjCloseRequest);
     }
+    // 投影通告：监听 Bible 插件的状态 / 路径广播与 md 文件直接编辑
+    this.initNoticeEvents();
 
     /* 开机就能按 P / [：视图级快捷键挂在 HymnsView 上，Obsidian 启动若没把 Hymns
        面板摆到侧边栏（视图没被实例化），那些监听根本不存在，必须先点开 Hymns 才能用。
@@ -6997,6 +8253,7 @@ class HymnsPlugin extends Plugin {
 
   onunload() {
     this._unloaded = true;
+    this.destroyNoticeEvents();
     // 第三重保险：主动注销视图类型，即便 Obsidian 的 registerView 清理回调被跳过也不会残留。
     // unregisterView 内部先判 hasOwnProperty 再 delete，重复调用幂等。
     try {
@@ -7270,6 +8527,359 @@ class HymnsPlugin extends Plugin {
     return { settings: this.settings, playlists: this.playlists, recent: this.recent, removedBuiltinIds: this.removedBuiltinIds, whiteboardIndex: this.whiteboardIndex || {} };
   }
   async saveAll() { await this.saveData(this.allData()); }
+
+  /* ===== 投影通告：与 Bible search and reader 共用同一份 md ===== */
+  noticeFolder() { return normalizeNoticeFolder(this.settings && this.settings.noticeFolder); }
+  noticeDocPath() { return noticeDocPath(this.noticeFolder()); }
+
+  /* ---- 通告显示设置的跨插件同步 ----
+     每一项设置仍各自存在自己的 data.json（另一端没装 / 没开也照常工作）；
+     改动时广播一份快照，另一端收到后覆盖本地这几项并重画投影，不再回广播（不乒乓）。 */
+  noticeSettingsSnapshot() {
+    const s = this.settings || {};
+    return {
+      mode: normalizeNoticeMode(s.noticeMode),
+      topHeight: normalizeNoticeZoneHeight(s.noticeTopZoneHeight),
+      bottomHeight: normalizeNoticeZoneHeight(s.noticeBottomZoneHeight),
+      titleFont: normalizeNoticeFontSize(s.noticeTitleFontSize),
+      bodyFont: normalizeNoticeFontSize(s.noticeBodyFontSize),
+      dividerWidth: normalizeNoticeDividerWidth(s.noticeDividerWidth)
+    };
+  }
+
+  // 只写真正变了的值；返回 true 表示本地确实被改动（调用方据此决定落盘 / 重画）
+  applyNoticeSettingsSnapshot(snap) {
+    if (!snap || !this.settings) return false;
+    const next = {
+      noticeMode: normalizeNoticeMode(snap.mode),
+      noticeTopZoneHeight: normalizeNoticeZoneHeight(snap.topHeight),
+      noticeBottomZoneHeight: normalizeNoticeZoneHeight(snap.bottomHeight),
+      noticeTitleFontSize: normalizeNoticeFontSize(snap.titleFont),
+      noticeBodyFontSize: normalizeNoticeFontSize(snap.bodyFont),
+      noticeDividerWidth: normalizeNoticeDividerWidth(snap.dividerWidth)
+    };
+    let changed = false;
+    for (const k of Object.keys(next)) {
+      if (this.settings[k] !== next[k]) { this.settings[k] = next[k]; changed = true; }
+    }
+    return changed;
+  }
+
+  notifyNoticeSettingsChanged(opts) {
+    try {
+      const doc = (typeof document !== 'undefined') ? document : null;
+      if (!doc || typeof doc.dispatchEvent !== 'function') return;
+      doc.dispatchEvent(new CustomEvent(NOTICE_SETTINGS_EVENT, {
+        detail: Object.assign(this.noticeSettingsSnapshot(), { source: (opts && opts.source) || 'hymns' })
+      }));
+    } catch (e) { /* 广播失败不影响本地设置 */ }
+  }
+
+  // 拖动滑条 / 分界线会连续触发，合并成一次广播
+  scheduleNoticeSettingsBroadcast(opts) {
+    try { if (this._noticeSettingsTimer) clearTimeout(this._noticeSettingsTimer); } catch (e) { /* ignore */ }
+    this._noticeSettingsTimer = setTimeout(() => {
+      this._noticeSettingsTimer = null;
+      this.notifyNoticeSettingsChanged(opts);
+    }, 200);
+  }
+
+  /* ---- 通告文件实际位置跟随 ----
+     另一端改过「通告文件夹」时，如果本插件当时没开、没收广播，settings.noticeFolder 就是旧的。
+     这时若直接按旧路径读/写，会在旧位置再生成一份 bible-notice.md（用户遇到的重复文件）。
+     所以读到「文件不存在」时先在仓库里找现成的 bible-notice.md，跟着它走。 */
+  async noticeDocCandidates() {
+    const vault = this.app && this.app.vault;
+    const out = [];
+    let files = [];
+    try { if (vault && typeof vault.getFiles === 'function') files = vault.getFiles() || []; } catch (e) { files = []; }
+    for (const f of files) {
+      const p = f && typeof f.path === 'string' ? f.path : '';
+      if (p && (p === NOTICE_FILENAME || /\/bible-notice\.md$/i.test(p))) out.push(p);
+    }
+    if (out.length) return out;
+    // getFiles 不可用（测试桩 / 极老版本）时退到底层 adapter 递归查找，深度限制防跑飞
+    const adapter = vault && vault.adapter;
+    if (!adapter || typeof adapter.list !== 'function') return out;
+    const walk = async (dir, depth) => {
+      if (depth > 6) return;
+      let res = null;
+      try { res = await adapter.list(dir || ''); } catch (e) { return; }
+      for (const f of (res && res.files) || []) {
+        if (f === NOTICE_FILENAME || /\/bible-notice\.md$/i.test(f)) out.push(f);
+      }
+      for (const d of (res && res.folders) || []) await walk(d, depth + 1);
+    };
+    await walk('', 0);
+    return out;
+  }
+
+  async noticeDocItemCount(path) {
+    const adapter = this.app && this.app.vault && this.app.vault.adapter;
+    if (!adapter || typeof adapter.read !== 'function') return -1;
+    try { return (parseNoticeDoc(await adapter.read(path)).items || []).length; } catch (e) { return -1; }
+  }
+
+  // 返回当前实际使用的路径（可能因跟随而改了 settings.noticeFolder）
+  // opts.missingOnly：只在自己这份文件不存在时才跟随（写文件前的快速对账，不做模板比较）
+  async adoptNoticeLocation(opts) {
+    const adapter = this.app && this.app.vault && this.app.vault.adapter;
+    if (!adapter || typeof adapter.exists !== 'function') return this.noticeDocPath();
+    const curPath = this.noticeDocPath();
+    let curExists = false;
+    try { curExists = !!(await adapter.exists(curPath)); } catch (e) { curExists = false; }
+    if (curExists && opts && opts.missingOnly) return curPath;
+    const cands = (await this.noticeDocCandidates()).filter(p => p !== curPath);
+    if (!cands.length) return curPath;
+    if (curExists) {
+      // 自己这份还是「刚生成、没改过」的模板（另一种情况：根目录被旧文件占着），
+      // 而别处那份有真内容 —— 说明该跟的是它。已编辑过就一律不动，绝不替用户搬家。
+      const mine = await this.noticeDocItemCount(curPath);
+      let best = '', bestN = 0;
+      for (const p of cands) {
+        const n = await this.noticeDocItemCount(p);
+        if (n > bestN) { bestN = n; best = p; }
+      }
+      if (!(mine <= 1 && bestN > mine)) return curPath;
+      return this.adoptNoticePath(best);
+    }
+    let best = '', bestN = -1;
+    for (const p of cands) {
+      const n = await this.noticeDocItemCount(p);
+      if (n > bestN) { bestN = n; best = p; }
+    }
+    return this.adoptNoticePath(best || cands[0]);
+  }
+
+  // 把 settings.noticeFolder 指到某个已有文件的目录（文件本身不动），并落盘
+  adoptNoticePath(path) {
+    const p = String(path || '');
+    const slash = p.lastIndexOf('/');
+    const folder = normalizeNoticeFolder(slash >= 0 ? p.slice(0, slash) : '');
+    const next = noticeDocPath(folder);
+    if (next === this.noticeDocPath()) return next;
+    this.settings.noticeFolder = folder;
+    try { const r = this.saveAll(); if (r && typeof r.catch === 'function') r.catch(() => { /* ignore */ }); } catch (e) { /* ignore */ }
+    return next;
+  }
+
+  async readNoticeDoc(createIfMissing) {
+    // 建文件前先对一次账：别处的 bible-notice.md 才是正主时，跟着它走而不是另起一份
+    if (createIfMissing) await this.adoptNoticeLocation({ missingOnly: true });
+    const path = this.noticeDocPath();
+    const adapter = this.app && this.app.vault && this.app.vault.adapter;
+    const blank = { enabled: false, active: 0, activeTop: 0, activeBottom: 0, items: [], path };
+    if (!adapter || typeof adapter.read !== 'function') return blank;
+    try {
+      if (!(await adapter.exists(path))) {
+        if (!createIfMissing) return blank;
+        await adapter.write(path, buildNoticeDoc());
+      }
+      const raw = await adapter.read(path);
+      return Object.assign(parseNoticeDoc(raw), { path });
+    } catch (e) { return blank; }
+  }
+
+  async writeNoticeDoc(patch, opts) {
+    const path = this.noticeDocPath();
+    const adapter = this.app && this.app.vault && this.app.vault.adapter;
+    if (!adapter || typeof adapter.read !== 'function' || typeof adapter.write !== 'function') return null;
+    try {
+      const cur = await this.readNoticeDoc(true);
+      const next = Object.assign({
+        enabled: cur.enabled, active: cur.active,
+        activeTop: cur.activeTop, activeBottom: cur.activeBottom
+      }, patch || {});
+      const items = Object.prototype.hasOwnProperty.call(patch || {}, 'items') ? patch.items : cur.items;
+      const text = serializeNoticeDoc(next, items);
+      await adapter.write(path, text);
+      this.notifyNoticeChanged(next, items, opts);
+      return Object.assign(parseNoticeDoc(text), { path });
+    } catch (e) { return null; }
+  }
+
+  notifyNoticeChanged(state, items, opts) {
+    try {
+      const doc = (typeof document !== 'undefined') ? document : null;
+      if (!doc || typeof doc.dispatchEvent !== 'function') return;
+      const detail = {
+        path: this.noticeDocPath(),
+        enabled: !!(state && state.enabled),
+        active: Math.max(0, parseInt(state && state.active, 10) || 0),
+        activeTop: Math.max(0, parseInt(state && state.activeTop, 10) || 0),
+        activeBottom: Math.max(0, parseInt(state && state.activeBottom, 10) || 0),
+        items: Array.isArray(items) ? items : [],
+        source: (opts && opts.source) || 'hymns'
+      };
+      doc.dispatchEvent(new CustomEvent(NOTICE_STATE_EVENT, { detail }));
+    } catch (e) { /* 广播失败不影响写盘 */ }
+  }
+
+  notifyNoticePathChanged(oldFolder, newFolder) {
+    try {
+      const doc = (typeof document !== 'undefined') ? document : null;
+      if (!doc || typeof doc.dispatchEvent !== 'function') return;
+      const oldPath = noticeDocPath(oldFolder), newPath = noticeDocPath(newFolder);
+      doc.dispatchEvent(new CustomEvent(NOTICE_PATH_EVENT, {
+        detail: { oldPath, newPath, oldFolder, newFolder, source: 'hymns' }
+      }));
+    } catch (e) { /* ignore */ }
+  }
+
+  async migrateNoticeDoc(oldFolder, newFolder) {
+    const from = noticeDocPath(oldFolder), to = noticeDocPath(newFolder);
+    if (from === to) return { ok: true, moved: false };
+    const vault = this.app && this.app.vault;
+    const adapter = vault && vault.adapter;
+    if (!adapter || typeof adapter.exists !== 'function') return { ok: false, moved: false, reason: 'no-adapter' };
+    try {
+      // 旧文件不存在（还没创建过通告）：只改设置即可，不用造一个空文件
+      if (!(await adapter.exists(from))) return { ok: true, moved: false };
+      const parts = to.split('/');
+      let dir = '';
+      for (let i = 0; i < parts.length - 1; i++) {
+        dir = dir ? dir + '/' + parts[i] : parts[i];
+        if (!(await adapter.exists(dir)) && typeof adapter.mkdir === 'function') await adapter.mkdir(dir);
+      }
+      // 目标处已经有同名文件：不再直接失败（那样「改回根目录」会被根目录里的旧副本挡住），
+      // 把目标那份备份成 bible-notice.backup-<时间>.md，再用当前这份覆盖它。
+      if (await adapter.exists(to)) {
+        const srcText = await adapter.read(from);
+        let dstText = '';
+        try { dstText = await adapter.read(to); } catch (e) { dstText = ''; }
+        let backup = '';
+        if (srcText !== dstText) {
+          backup = await this.noticeBackupPath(to);
+          await adapter.write(backup, dstText);
+          await adapter.write(to, srcText);
+        }
+        await this.removeNoticeFile(from);
+        this.notifyNoticePathChanged(oldFolder, newFolder);
+        return { ok: true, moved: true, backup };
+      }
+      if (typeof adapter.rename === 'function') await adapter.rename(from, to);
+      else {
+        const text = await adapter.read(from);
+        await adapter.write(to, text);
+        await adapter.remove(from);
+      }
+      this.notifyNoticePathChanged(oldFolder, newFolder);
+      return { ok: true, moved: true, backup: '' };
+    } catch (e) { return { ok: false, moved: false, reason: String((e && e.message) || e) }; }
+  }
+
+  // 备份文件与被搬的通告同目录，文件名带秒级时间戳，撞名就再加序号
+  async noticeBackupPath(targetPath) {
+    const slash = targetPath.lastIndexOf('/');
+    const dir = slash >= 0 ? targetPath.slice(0, slash + 1) : '';
+    const d = new Date();
+    const pad = (n) => (n < 10 ? '0' : '') + n;
+    const stamp = d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '-' +
+      pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds());
+    const adapter = this.app && this.app.vault && this.app.vault.adapter;
+    let p = dir + 'bible-notice.backup-' + stamp + '.md';
+    let i = 2;
+    while (adapter && typeof adapter.exists === 'function' && i < 20 && (await adapter.exists(p))) {
+      p = dir + 'bible-notice.backup-' + stamp + '-' + i + '.md';
+      i++;
+    }
+    return p;
+  }
+
+  // 删源文件优先走 vault.delete（跟随用户的「删除进回收站」设置），没有再退到底层 adapter
+  async removeNoticeFile(path) {
+    const vault = this.app && this.app.vault;
+    if (vault && typeof vault.getAbstractFileByPath === 'function' && typeof vault.delete === 'function') {
+      const f = vault.getAbstractFileByPath(path);
+      if (f) { await vault.delete(f); return true; }
+    }
+    const adapter = vault && vault.adapter;
+    if (adapter && typeof adapter.remove === 'function') { await adapter.remove(path); return true; }
+    return false;
+  }
+
+  // 其它插件 / 直接编辑 md 后，把状态推给正在显示的投影层
+  refreshNoticeInProjection(state) {
+    const p = this._projection;
+    if (!p || p._closed || typeof p.applyNoticeState !== 'function') return;
+    p.applyNoticeState(state);
+    if (typeof p.refreshNoticePanel === 'function') p.refreshNoticePanel();
+  }
+
+  initNoticeEvents() {
+    const doc = (typeof document !== 'undefined') ? document : null;
+    if (!doc || typeof doc.addEventListener !== 'function') return;
+    if (!this._onNoticeState) {
+      this._onNoticeState = (e) => {
+        if (!e || !e.detail || !e.detail.path) return;
+        if (e.detail.path !== this.noticeDocPath()) {
+          // 对面写的路径跟自己不一样：本地可能还指着旧位置（会另生成一份）。
+          // 只在自己这份确实不存在时才改指向，别把有内容的文件丢掉。
+          if (e.detail.source !== 'hymns' && typeof this.adoptNoticeLocation === 'function') {
+            const p = this.adoptNoticeLocation();
+            if (p && typeof p.then === 'function') p.catch(() => { /* ignore */ });
+          }
+          return;
+        }
+        if (e.detail.source === 'hymns') return;   // 自己写的，投影层已经刷过
+        this.refreshNoticeInProjection(e.detail);
+      };
+      doc.addEventListener(NOTICE_STATE_EVENT, this._onNoticeState);
+    }
+    if (!this._onNoticePath) {
+      this._onNoticePath = (e) => {
+        if (!e || !e.detail) return;
+        // newFolder 可以是空串（搬回仓库根目录），绝不能当成「没带信息」丢掉
+        const nf = normalizeNoticeFolder(e.detail.newFolder);
+        if (e.detail.source === 'hymns') return;
+        const cur = this.noticeFolder();
+        if (cur === nf) return;
+        if (e.detail.oldFolder != null && cur !== normalizeNoticeFolder(e.detail.oldFolder)) return;
+        this.settings.noticeFolder = nf;
+        const p = this.saveAll();
+        if (p && typeof p.catch === 'function') p.catch(() => { /* ignore */ });
+        this.readNoticeDoc(false).then(s => this.refreshNoticeInProjection(s));
+      };
+      doc.addEventListener(NOTICE_PATH_EVENT, this._onNoticePath);
+    }
+    if (!this._onNoticeSettings) {
+      this._onNoticeSettings = (e) => {
+        if (!e || !e.detail || e.detail.source === 'hymns') return;
+        if (!this.applyNoticeSettingsSnapshot(e.detail)) return;
+        // 只负责把设置落到本地（投影没开也要落盘）；开着的投影有自己的监听去重画，别重复刷
+        const p = this.saveAll();
+        if (p && typeof p.catch === 'function') p.catch(() => { /* ignore */ });
+      };
+      doc.addEventListener(NOTICE_SETTINGS_EVENT, this._onNoticeSettings);
+    }
+    // 启动时对一次账：另一端在本次会话之前改过文件夹也能跟上（异步，不阻塞加载）
+    try {
+      const p = this.adoptNoticeLocation();
+      if (p && typeof p.then === 'function') p.catch(() => { /* ignore */ });
+    } catch (e) { /* ignore */ }
+    if (!this._onNoticeVault && this.app && this.app.vault && typeof this.app.vault.on === 'function') {
+      this._onNoticeVault = (file) => {
+        if (!file || !file.path || file.path !== this.noticeDocPath()) return;
+        this.readNoticeDoc(false).then(s => this.refreshNoticeInProjection(s));
+      };
+      this.app.vault.on('modify', this._onNoticeVault);
+    }
+  }
+
+  destroyNoticeEvents() {
+    const doc = (typeof document !== 'undefined') ? document : null;
+    if (doc && typeof doc.removeEventListener === 'function') {
+      if (this._onNoticeState) { try { doc.removeEventListener(NOTICE_STATE_EVENT, this._onNoticeState); } catch (e) { /* ignore */ } this._onNoticeState = null; }
+      if (this._onNoticePath) { try { doc.removeEventListener(NOTICE_PATH_EVENT, this._onNoticePath); } catch (e) { /* ignore */ } this._onNoticePath = null; }
+      if (this._onNoticeSettings) { try { doc.removeEventListener(NOTICE_SETTINGS_EVENT, this._onNoticeSettings); } catch (e) { /* ignore */ } this._onNoticeSettings = null; }
+    }
+    try { if (this._noticeSettingsTimer) clearTimeout(this._noticeSettingsTimer); } catch (e) { /* ignore */ }
+    this._noticeSettingsTimer = null;
+    if (this._onNoticeVault && this.app && this.app.vault && typeof this.app.vault.off === 'function') {
+      try { this.app.vault.off('modify', this._onNoticeVault); } catch (e) { /* ignore */ }
+      this._onNoticeVault = null;
+    }
+  }
   /* 保存设置（连同歌单等一并写入同一份 data.json）。
      自动更新流程多处调用 saveSettings()，此前该方法缺失，导致
      checkForUpdate() 在联网前即抛「this.saveSettings is not a function」，

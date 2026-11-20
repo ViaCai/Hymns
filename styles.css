@@ -1081,7 +1081,7 @@ button.hymns-icon-btn.hymns-pl-del:hover { color: var(--text-error); background:
   max-height: 100dvh;
 }
 .hymns-proj .hymns-proj-stage {
-  inset: var(--hymns-safe-top) var(--hymns-safe-right) var(--hymns-safe-bottom) var(--hymns-safe-left);
+  inset: calc(var(--hymns-safe-top) + var(--hymns-notice-top-shift, 0px)) var(--hymns-safe-right) calc(var(--hymns-safe-bottom) + var(--hymns-notice-bottom-shift, 0px)) var(--hymns-safe-left);
 }
 .hymns-proj .hymns-proj-grip { top: var(--hymns-safe-top); }
 .hymns-proj .hymns-proj-tools {
@@ -1092,13 +1092,13 @@ button.hymns-icon-btn.hymns-pl-del:hover { color: var(--text-error); background:
 }
 .hymns-proj.is-fullscreen .hymns-proj-tools { top: calc(8px + var(--hymns-safe-top)); }
 .hymns-proj .hymns-proj-bar {
-  bottom: var(--hymns-safe-bottom);
+  bottom: var(--hymns-safe-bottom);   /* 底栏永远贴底：底部通告区在它上方 46px，互不重叠 */
   box-sizing: border-box;
   padding-left: calc(18px + var(--hymns-safe-left));
   padding-right: calc(18px + var(--hymns-safe-right));
 }
 .hymns-proj .hymns-proj-playbar {
-  bottom: var(--hymns-safe-bottom);
+  bottom: var(--hymns-safe-bottom);   /* 底栏永远贴底：底部通告区在它上方 46px，互不重叠 */
   padding-left: calc(16px + var(--hymns-safe-left));
   padding-right: calc(16px + var(--hymns-safe-right));
 }
@@ -1380,4 +1380,223 @@ body.is-mobile .hymns-proj .hymns-proj-tools { -webkit-app-region: no-drag; }
   .hymns-proj .hymns-proj-picker-cats { flex-basis: 42%; max-width: 132px; padding: 3px 4px 6px; }
   .hymns-proj .hymns-proj-picker-side { padding: 3px 4px 6px; }
   .hymns-proj .hymns-proj-picker-colhead { font-size: 10px; padding: 5px 6px; }
+}
+
+/* ============ 投影通告（与 Bible 插件共用 bible-notice.md） ============
+   投影层是固定深色，原生控件按 color-scheme:dark 上色，不随 Obsidian 明暗模式变化。 */
+.hymns-proj { color-scheme: dark; }
+.hymns-proj-notice-zone {
+  position: absolute; left: 0; right: 0; z-index: 20;
+  box-sizing: border-box; padding: 6px 24px;
+  display: flex; align-items: flex-start; justify-content: center;
+  background: rgba(14, 14, 22, .82); color: #f5f5fa;
+  /* 高度跟着拖动分界线实时变（变量由 applyNoticeLayout 写），内容超出就上下滚动 */
+  overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain;
+  touch-action: pan-y;   /* 触屏里上下滑＝滚动通告，不当作翻节手势 */
+  pointer-events: auto;
+  scrollbar-width: thin; scrollbar-color: rgba(255, 225, 74, .55) rgba(255, 255, 255, .08);
+}
+/* WebView 里默认是无轨浮层滚动条，投影时看不见；这里给出可见的滑轨与滑块 */
+.hymns-proj-notice-zone::-webkit-scrollbar { width: 10px; }
+.hymns-proj-notice-zone::-webkit-scrollbar-track { background: rgba(255, 255, 255, .08); border-radius: 5px; }
+.hymns-proj-notice-zone::-webkit-scrollbar-thumb { background: rgba(255, 225, 74, .55); border-radius: 5px; }
+.hymns-proj-notice-zone::-webkit-scrollbar-thumb:hover { background: rgba(255, 225, 74, .8); }
+.hymns-proj-notice-zone-top {
+  top: calc(var(--hymns-safe-top, 0px) + var(--hymns-notice-top-offset, 62px));
+  height: var(--hymns-notice-top-h, 120px);
+}
+.hymns-proj-notice-zone-bottom {
+  bottom: calc(var(--hymns-safe-bottom, 0px) + 46px);
+  height: var(--hymns-notice-bottom-h, 120px);
+}
+.hymns-proj-notice-zone.is-hidden, .hymns-proj-notice-resizer.is-hidden { display: none; }
+/* 内容不满一屏时垂直居中，超出时从顶部开始滚动（flex 居中在溢出容器里会裁掉上半截） */
+.hymns-proj-notice-inner {
+  width: 100%; min-height: 100%; box-sizing: border-box;
+  display: flex; flex-direction: column; justify-content: center;
+  text-align: center;
+}
+.hymns-proj-notice-title { color: #ffe14a; font-weight: 700; margin-bottom: 4px; }
+.hymns-proj-notice-body { white-space: pre-wrap; line-height: 1.45; }
+
+/* 分界线：外层是 10px 拖动区，亮线粗细由 --hymns-notice-divider-w 控制 */
+.hymns-proj-notice-resizer {
+  position: absolute; left: 0; right: 0; height: 10px; z-index: 21;
+  cursor: row-resize; touch-action: none; background: transparent;
+}
+.hymns-proj-notice-resizer::after {
+  content: ''; position: absolute; left: 0; right: 0;
+  height: var(--hymns-notice-divider-w, 2px); background: #ffe14a;
+}
+.hymns-proj-notice-resizer-top { top: calc(var(--hymns-safe-top, 0px) + var(--hymns-notice-top-offset, 62px) + var(--hymns-notice-top-h, 0px) - 5px); }
+.hymns-proj-notice-resizer-bottom { bottom: calc(var(--hymns-safe-bottom, 0px) + 46px + var(--hymns-notice-bottom-h, 0px) - 5px); }
+
+/* 管理界面：双击通告区展开的独立浮层（不再塞进通告区内部）。
+   以前塞在 overflow-y:auto 的半透明通告区里，标题被工具条压住、正文从面板底下透出来、
+   分界线横穿面板。现在贴着对应通告区那一侧展开，自身滚动，永远不透明。 */
+.hymns-proj-notice-manage {
+  position: absolute; z-index: 80;
+  left: 50%; transform: translateX(-50%);
+  width: min(720px, calc(100vw - 32px));
+  max-height: min(62vh, 520px);
+  box-sizing: border-box;
+  display: flex; flex-direction: column; gap: 6px;
+  background: #14141e; color: #f5f5fa;
+  border: 1px solid rgba(255, 255, 255, .2);
+  border-radius: 8px; padding: 10px 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .55);
+  text-align: left; font-size: 13px;
+  pointer-events: auto; touch-action: pan-y;
+}
+.hymns-proj-notice-manage.is-top {
+  top: calc(var(--hymns-safe-top, 0px) + var(--hymns-notice-top-offset, 62px) + 6px);
+}
+.hymns-proj-notice-manage.is-bottom {
+  bottom: calc(var(--hymns-safe-bottom, 0px) + 46px + 6px);
+}
+.hymns-proj-notice-manage-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex: 0 0 auto; }
+.hymns-proj-notice-manage-title { font-weight: 700; font-size: 14px; }
+.hymns-proj-notice-manage-actions { display: flex; gap: 6px; }
+/* 预览：固定小字号 + 限高滚动。以前跟着通告字号走、正文又长，直接把面板撑成一堵墙 */
+.hymns-proj-notice-preview {
+  flex: 0 0 auto; max-height: 104px; overflow-y: auto; overscroll-behavior: contain;
+  margin: 0; padding: 6px 8px; border-radius: 6px;
+  background: rgba(255, 255, 255, .07);
+  font-size: 13px; line-height: 1.45;
+}
+.hymns-proj-notice-preview-title { color: #ffe14a; font-weight: 700; font-size: 13px; }
+.hymns-proj-notice-preview-body { white-space: pre-wrap; font-size: 13px; overflow-wrap: anywhere; }
+.hymns-proj-notice-list {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  display: flex; flex-direction: column;
+  scrollbar-width: thin; scrollbar-color: rgba(255, 225, 74, .55) rgba(255, 255, 255, .08);
+}
+.hymns-proj-notice-list::-webkit-scrollbar, .hymns-proj-notice-preview::-webkit-scrollbar { width: 10px; }
+.hymns-proj-notice-list::-webkit-scrollbar-track, .hymns-proj-notice-preview::-webkit-scrollbar-track { background: rgba(255, 255, 255, .08); border-radius: 5px; }
+.hymns-proj-notice-list::-webkit-scrollbar-thumb, .hymns-proj-notice-preview::-webkit-scrollbar-thumb { background: rgba(255, 225, 74, .55); border-radius: 5px; }
+/* 管理面板开着时区里的正常内容先隐起来：面板是独立浮层，不需要区里再叠一份 */
+.hymns-proj-notice-zone.is-managing .hymns-proj-notice-inner { visibility: hidden; }
+.hymns-proj-notice-item {
+  display: flex; align-items: center; gap: 8px; padding: 6px 4px;
+  border-top: 1px solid rgba(255, 255, 255, .14); cursor: pointer;
+}
+.hymns-proj-notice-item.is-active { background: rgba(255, 225, 74, .16); }
+.hymns-proj-notice-item-prefix { color: #b9b8c8; flex: 0 0 auto; }
+.hymns-proj-notice-item-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hymns-proj-notice-item-ops { display: flex; gap: 4px; flex: 0 0 auto; }
+.hymns-proj-notice-item-form { border-top: 1px solid rgba(255, 255, 255, .14); padding: 6px 4px; }
+.hymns-proj-notice-edit-head { display: flex; align-items: center; gap: 6px; }
+.hymns-proj-notice-edit-hint { font-size: 11px; color: #aaa9bb; margin-top: 3px; }
+
+/* ⚙ 投影设置面板 */
+.hymns-proj-settings-panel {
+  position: absolute; z-index: 60;
+  top: calc(var(--hymns-safe-top, 0px) + var(--hymns-notice-top-offset, 62px) + var(--hymns-notice-top-h, 0px));
+  right: calc(14px + var(--hymns-safe-right, 0px));
+  width: 420px; max-width: calc(100vw - 28px); max-height: 78vh; overflow: auto;
+  box-sizing: border-box; padding: 12px 14px; border-radius: 10px;
+  background: rgba(20, 20, 30, .96); color: #f5f5fa;
+  border: 1px solid rgba(255, 255, 255, .18);
+  font-size: 13px; text-align: left; pointer-events: auto;
+}
+.hymns-proj-settings-title { font-size: 15px; font-weight: 700; margin-bottom: 8px; }
+.hymns-proj-settings-group + .hymns-proj-settings-group { border-top: 1px solid rgba(255, 255, 255, .14); margin-top: 8px; padding-top: 8px; }
+.hymns-proj-settings-group-title { font-size: 11px; color: #aaa9bb; margin-bottom: 4px; letter-spacing: .04em; }
+.hymns-proj-settings-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; padding: 5px 0; min-height: 30px;
+}
+.hymns-proj-settings-row-label { flex: 0 0 92px; text-align: left; color: #f5f5fa; }
+.hymns-proj-settings-ctrl { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.hymns-proj-settings-mode-ctrl { display: flex; gap: 4px; }
+.hymns-proj-settings-folder-ctrl {
+  position: relative; flex: 1; min-width: 0;
+  display: flex; align-items: center; gap: 6px;
+}
+.hymns-proj-settings-folder-input-wrap { position: relative; flex: 1; min-width: 0; }
+.hymns-proj-settings-folder-input { width: 100%; box-sizing: border-box; }
+/* 输入框右端的一键清空：只清值（＝仓库根目录），还要按「确定」才生效 */
+/* 右侧要给清空按钮留位；特异性必须压过下面的 .hymns-proj-settings-panel input[type=text] */
+.hymns-proj-settings-panel input[type=text].hymns-proj-settings-folder-input { padding-right: 26px; }
+/* 特异性要压过下方 .hymns-proj-settings-panel button 的基础按钮样式 */
+.hymns-proj-settings-panel .hymns-proj-settings-folder-clear {
+  position: absolute; top: 0; right: 0; width: 24px; height: 100%;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0; margin: 0; background: transparent; border: none; border-radius: 4px;
+  color: #ddd; opacity: .65; cursor: pointer;
+  -webkit-app-region: no-drag; app-region: no-drag;
+}
+.hymns-proj-settings-panel .hymns-proj-settings-folder-clear:hover { opacity: 1; background: rgba(255, 255, 255, .18); }
+.hymns-proj-settings-panel .hymns-proj-settings-folder-clear .svg-icon { width: 14px; height: 14px; }
+.hymns-proj-settings-panel .hymns-proj-settings-folder-clear.is-hidden { display: none; }
+.hymns-proj-settings-folder-btns { display: flex; gap: 4px; flex: 0 0 auto; }
+/* 「确定」是主按钮：描边用投影的黄色强调色 */
+.hymns-proj-settings-panel .hymns-proj-settings-folder-ok { border-color: rgba(255, 225, 74, .75); color: #ffe14a; font-weight: 600; }
+.hymns-proj-settings-panel .hymns-proj-settings-folder-ok:hover { background: rgba(255, 225, 74, .2); }
+/* 点「确定」后的回执：移动中 → ✓ 已保存 / ✗ 失败，1.6 秒后自动回「确定」 */
+.hymns-proj-settings-panel .hymns-proj-settings-folder-btns button:disabled { opacity: .65; cursor: default; }
+.hymns-proj-settings-panel .hymns-proj-settings-folder-ok.is-ok {
+  border-color: #46c46a; color: #46c46a; background: rgba(70, 196, 106, .2);
+}
+.hymns-proj-settings-panel .hymns-proj-settings-folder-ok.is-fail {
+  border-color: #ff7b72; color: #ff7b72; background: rgba(255, 123, 114, .2);
+}
+/* 复选框只作视觉指示：点击穿透到整行，由整行统一翻转 */
+.hymns-proj-settings-check {
+  pointer-events: none; flex: 0 0 auto;
+  width: 16px; height: 16px; margin: 0; accent-color: #ffe14a;
+}
+
+/* 顶栏时钟：紧跟左上角模式按钮（与 Bible 投影同位置）；跟着工具条一起淡出；字号由设置内联写入 */
+.hymns-proj .hymns-proj-clock {
+  flex: 0 0 auto;
+  font-size: 40px; font-weight: 500; line-height: 1.05;
+  letter-spacing: .02em; font-variant-numeric: tabular-nums;
+  color: #f5f5fa; white-space: nowrap; user-select: none;
+  margin: 0 10px 0 8px;
+}
+.hymns-proj .hymns-proj-clock.is-hidden { display: none; }
+@media (max-width: 560px) {
+  /* 手机宽度放不下：工具条本来就换行，时钟直接隐藏（设置里可再关） */
+  .hymns-proj .hymns-proj-clock { display: none; }
+}
+
+.hymns-proj input, .hymns-proj textarea, .hymns-proj button { font: inherit; }
+.hymns-proj-settings-panel input[type=text],
+.hymns-proj-notice-item-title,
+.hymns-proj-notice-item-body {
+  background: rgba(255, 255, 255, .1); color: #fff;
+  border: 1px solid rgba(255, 255, 255, .25); border-radius: 4px;
+  padding: 4px 6px; outline: none;
+}
+.hymns-proj-settings-panel input::placeholder { color: #aaa9bb; }
+.hymns-proj-settings-panel input[type=range],
+.hymns-proj-settings-range { width: 130px; accent-color: #ffe14a; }
+.hymns-proj-settings-value { min-width: 62px; text-align: right; font-variant-numeric: tabular-nums; }
+.hymns-proj-settings-panel button,
+.hymns-proj-notice-manage button {
+  background: rgba(255, 255, 255, .1); color: #fff;
+  border: 1px solid rgba(255, 255, 255, .25); border-radius: 4px;
+  padding: 3px 8px; cursor: pointer;
+}
+.hymns-proj-settings-panel button:hover,
+.hymns-proj-notice-manage button:hover { background: rgba(255, 255, 255, .2); }
+.hymns-proj-settings-mode-btn.is-active { background: rgba(255, 225, 74, .24); border-color: #ffe14a; color: #ffe14a; }
+.hymns-proj-notice-btn.is-active { color: #ffe14a; background: rgba(255, 225, 74, .2); }
+.hymns-proj-notice-btn.is-active:hover { background: rgba(255, 225, 74, .3); }
+.hymns-proj-notice-item-body { width: 100%; box-sizing: border-box; min-height: 88px; resize: vertical; }
+
+.hymns-proj-folder-options {
+  position: absolute; top: 100%; left: 0; right: 0; z-index: 70;
+  max-height: 190px; overflow: auto; border-radius: 4px;
+  background: #262633; border: 1px solid rgba(255, 255, 255, .2);
+}
+.hymns-proj-folder-option { padding: 4px 8px; cursor: pointer; color: #fff; }
+.hymns-proj-folder-option:hover { background: rgba(255, 255, 255, .12); }
+
+@media (max-width: 480px) {
+  .hymns-proj-settings-panel { width: min(360px, calc(100vw - 20px)); right: 10px; }
+  .hymns-proj-settings-panel input[type=range],
+  .hymns-proj-settings-range { width: 96px; }
+  .hymns-proj-settings-row-label { flex-basis: 78px; }
 }
