@@ -165,6 +165,19 @@ const UPDATE_BASE = 'https://raw.githubusercontent.com/' + UPDATE_REPO + '/' + U
 
 // ==================== 更新日志内容（供弹窗离线展示；缺失时回退到远端 CHANGELOG.md）====================
 const CHANGELOG_CONTENT = {
+  '2.8.1': `## [2.8.1] - 2026-11-21
+
+### 改进
+- **通告编辑面板宽屏两栏**：窗口宽度 ≥500px 时左边看预览、右边编辑条目，中间有分隔线且两栏各自滚动；窄屏仍是上预览、下条目。
+
+### 修复
+- **分界线细时文字露到线外**：亮线改为贴着通告区裁剪边、留在区内显示，1–12px 任意粗细都不会让正文从线下面露出来。
+- **触屏双击打不开通告管理**：手机上连点通告区即可打开管理面板；划动滚动不会误判成点击。
+- **触屏双击条目无法编辑**：管理面板里连点某条通告直接进入编辑，✎ 按钮照旧可用，鼠标双击行为不变。
+
+### 小提示
+- 本次修复与 Bible Search and Reader 6.2.1 配套，两个插件一起更新体验一致。`,
+
   '2.8.0': `## [2.8.0] - 2026-11-21
 
 ### 本次更新
@@ -4528,7 +4541,29 @@ class HymnProjection {
       // 单击只选中；双击才展开管理（第一次单击不重建列表，避免吞掉 dblclick）
       zone.addEventListener('dblclick', (e) => {
         if (e && e.target && e.target.closest && e.target.closest('.hymns-proj-notice-manage')) return;
-        this.openNoticeManager(zone);
+        this.openNoticeManagerOnce(zone);
+      });
+      // 触屏没有可靠的 dblclick：移动端 WebView 会把连点当成缩放手势，dblclick 常被吃掉。
+      // 自己按 pointerup 的时间差认「连点两下」，与鼠标 dblclick 共用同一个去重守卫。
+      // 按下 / 松手位移超过 12px 视为滑动滚动通告，不参与点击计数。
+      let tapAt = 0, tapX = 0, tapY = 0, downX = 0, downY = 0, downOk = false;
+      zone.addEventListener('pointerdown', (e) => {
+        if (!e || (e.pointerType !== 'touch' && e.pointerType !== 'pen')) { downOk = false; return; }
+        downOk = true; downX = Number(e.clientX) || 0; downY = Number(e.clientY) || 0;
+      });
+      zone.addEventListener('pointerup', (e) => {
+        if (!e || !downOk) return;
+        downOk = false;
+        if (e.target && e.target.closest && e.target.closest('.hymns-proj-notice-manage')) return;
+        const now = Date.now();
+        const x = Number(e.clientX) || 0, y = Number(e.clientY) || 0;
+        if (Math.abs(x - downX) > 12 || Math.abs(y - downY) > 12) return;
+        if (tapAt && now - tapAt < 400 && Math.abs(x - tapX) < 32 && Math.abs(y - tapY) < 32) {
+          tapAt = 0;
+          this.openNoticeManagerOnce(zone);
+          return;
+        }
+        tapAt = now; tapX = x; tapY = y;
       });
     };
     bindZone(this.noticeTopZoneEl);
@@ -4801,6 +4836,16 @@ class HymnProjection {
     if (save !== false) this.saveNoticeSettings();
   }
 
+  /* 双击 / 连点两下的去重入口：鼠标 dblclick 与触屏连点在部分设备上会同时到达，
+     500ms 内同一侧只认第一次，避免「打开→立刻又关掉」的闪烁。 */
+  openNoticeManagerOnce(zone) {
+    const now = Date.now();
+    const g = this._noticeOpenGuard;
+    if (g && g.zone === zone && now - g.at < 500) return;
+    this._noticeOpenGuard = { zone, at: now };
+    this.openNoticeManager(zone);
+  }
+
   openNoticeManager(zone) {
     if (!zone || !this.el || !this.el.createDiv) return;
     this.closeProjectionSettings();
@@ -4823,9 +4868,46 @@ class HymnProjection {
     addBtn.addEventListener('click', (e) => { if (e && e.stopPropagation) e.stopPropagation(); self.addNoticeItem(); });
     const doneBtn = actions.createEl('button', { cls: 'hymns-proj-notice-manage-done', text: '完成', attr: { type: 'button' } });
     doneBtn.addEventListener('click', (e) => { if (e && e.stopPropagation) e.stopPropagation(); self.closeNoticeManager(); });
+    // 预览 + 条目放进同一个 body：宽屏左右分栏（左预览、右条目），窄屏仍上下堆叠，
+    // 断点在 styles.css 的 .hymns-proj-notice-manage-body 里。
+    const body = mgr.createDiv({ cls: 'hymns-proj-notice-manage-body' });
     // 预览：固定小字号 + 限高滚动，正文再长也不会把面板撑成一堵墙
-    mgr.createDiv({ cls: 'hymns-proj-notice-preview' });
-    mgr.createDiv({ cls: 'hymns-proj-notice-list' });
+    body.createDiv({ cls: 'hymns-proj-notice-preview' });
+    const listEl = body.createDiv({ cls: 'hymns-proj-notice-list' });
+    // 触屏：条目上只挂 dblclick 在移动 WebView 里基本不会触发，双击条目改不了。
+    // 和通告区一样自己按 pointerup 的时间差认「连点两下」：
+    // 按下→松手位移 >12px 视为滚动列表，不计数；✎ / 🗑 / 编辑表单里的点击也不参与。
+    // 监听挂在列表容器上，条目重画（选中态、开始编辑）都不会丢。
+    let tapAt = 0, tapX = 0, tapY = 0, downX = 0, downY = 0, downOk = false;
+    listEl.addEventListener('pointerdown', (e) => {
+      if (!e || (e.pointerType !== 'touch' && e.pointerType !== 'pen')) { downOk = false; return; }
+      downOk = true;
+      downX = Number(e.clientX) || 0;
+      downY = Number(e.clientY) || 0;
+    });
+    listEl.addEventListener('pointerup', (e) => {
+      if (!e || !downOk) return;
+      downOk = false;
+      const t = e.target;
+      if (t && t.closest && (t.closest('.hymns-proj-notice-item-ops') || t.closest('.hymns-proj-notice-item-form'))) return;
+      const x = Number(e.clientX) || 0, y = Number(e.clientY) || 0;
+      if (Math.abs(x - downX) > 12 || Math.abs(y - downY) > 12) return;
+      const now = Date.now();
+      if (!tapAt || now - tapAt >= 400 || Math.abs(x - tapX) >= 32 || Math.abs(y - tapY) >= 32) {
+        tapAt = now; tapX = x; tapY = y;
+        return;
+      }
+      tapAt = 0;
+      const rowEl = t && t.closest ? t.closest('.hymns-proj-notice-item') : null;
+      let idx = this._noticeLastClickedIndex;
+      if (rowEl && rowEl.dataset && rowEl.dataset.noticeIndex != null) {
+        const n = parseInt(rowEl.dataset.noticeIndex, 10);
+        if (Number.isFinite(n)) idx = n;
+      }
+      if (!Number.isInteger(idx) || idx < 0) return;
+      this._noticeEditingIndex = idx;
+      this.fillNoticePanel();
+    });
     this._noticeManagerEl = mgr;
     this._noticePanelsOpen = true;
     // 通告区本身保持用户设定的高度，只把区里的正常内容藏起来（面板就在它上方/下方）

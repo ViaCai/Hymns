@@ -1419,7 +1419,11 @@ body.is-mobile .hymns-proj .hymns-proj-tools { -webkit-app-region: no-drag; }
 .hymns-proj-notice-title { color: #ffe14a; font-weight: 700; margin-bottom: 4px; }
 .hymns-proj-notice-body { white-space: pre-wrap; line-height: 1.45; }
 
-/* 分界线：外层是 10px 拖动区，亮线粗细由 --hymns-notice-divider-w 控制 */
+/* 分界线：外层是 10px 拖动区（以边界为中心），亮线粗细由 --hymns-notice-divider-w 控制。
+   亮线的「边界那一端」必须落在内容裁剪边上，并且留在通告区这一侧：
+   顶部区的边界是区下沿 → 线贴着下沿往上长（bottom: 5px）；底部区的边界是区上沿 → 线贴着上沿往下长（top: 5px）。
+   以前 ::after 用默认静态位置（拖动区顶端，比区底高 5px）：线细时文字会有最多 4px 露在线的下面，
+   线一粗又把溢出部分盖住，看起来就像「细线时内容超出分割线」。 */
 .hymns-proj-notice-resizer {
   position: absolute; left: 0; right: 0; height: 10px; z-index: 21;
   cursor: row-resize; touch-action: none; background: transparent;
@@ -1428,6 +1432,8 @@ body.is-mobile .hymns-proj .hymns-proj-tools { -webkit-app-region: no-drag; }
   content: ''; position: absolute; left: 0; right: 0;
   height: var(--hymns-notice-divider-w, 2px); background: #ffe14a;
 }
+.hymns-proj-notice-resizer-top::after { bottom: 5px; }
+.hymns-proj-notice-resizer-bottom::after { top: 5px; }
 .hymns-proj-notice-resizer-top { top: calc(var(--hymns-safe-top, 0px) + var(--hymns-notice-top-offset, 62px) + var(--hymns-notice-top-h, 0px) - 5px); }
 .hymns-proj-notice-resizer-bottom { bottom: calc(var(--hymns-safe-bottom, 0px) + 46px + var(--hymns-notice-bottom-h, 0px) - 5px); }
 
@@ -1474,6 +1480,17 @@ body.is-mobile .hymns-proj .hymns-proj-tools { -webkit-app-region: no-drag; }
 .hymns-proj-notice-list::-webkit-scrollbar, .hymns-proj-notice-preview::-webkit-scrollbar { width: 10px; }
 .hymns-proj-notice-list::-webkit-scrollbar-track, .hymns-proj-notice-preview::-webkit-scrollbar-track { background: rgba(255, 255, 255, .08); border-radius: 5px; }
 .hymns-proj-notice-list::-webkit-scrollbar-thumb, .hymns-proj-notice-preview::-webkit-scrollbar-thumb { background: rgba(255, 225, 74, .55); border-radius: 5px; }
+/* 预览 + 条目容器：窄屏上下堆叠（预览在上），宽屏自动变两栏（左预览、右条目）。
+   面板本身是 flex 列，body 必须能压缩，两栏才能各自滚动而不是把面板撑破。 */
+.hymns-proj-notice-manage-body { display: flex; flex-direction: column; gap: 6px; flex: 1 1 auto; min-height: 0; }
+/* 宽屏判定：宽度够 500px 就并排（桌面窗口、平板、手机横屏都算），更窄才回上下堆叠。 */
+@media (min-width: 500px) {
+  .hymns-proj-notice-manage { width: min(1040px, calc(100vw - 48px)); }
+  .hymns-proj-notice-manage-body { flex-direction: row; align-items: stretch; gap: 12px; }
+  /* 两栏时预览不再限高，跟着面板高度走；左栏自己滚动 */
+  .hymns-proj-notice-preview { flex: 1 1 44%; min-width: 0; max-height: none; }
+  .hymns-proj-notice-list { flex: 1 1 56%; min-width: 0; border-left: 1px solid rgba(255, 255, 255, .14); padding-left: 10px; }
+}
 /* 管理面板开着时区里的正常内容先隐起来：面板是独立浮层，不需要区里再叠一份 */
 .hymns-proj-notice-zone.is-managing .hymns-proj-notice-inner { visibility: hidden; }
 .hymns-proj-notice-item {
