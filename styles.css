@@ -777,6 +777,28 @@ button.hymns-icon-btn.hymns-pl-del:hover { color: var(--text-error); background:
 }
 .hymns-proj-stage canvas { display: block; background: #fff; }
 
+/* ===== 黑屏 =====
+   内容黑屏只盖舞台，工具条 / 翻节按钮 / 底部信息条照常可见可点（与 Bible 经文区黑屏一致）；
+   整屏黑屏盖住投影层里的一切（含通告与浮层）。两层都在投影层内部，整屏时不被 top layer 挡住。 */
+.hymns-proj .hymns-proj-blank-content {
+  position: absolute; inset: 0; z-index: 2;
+  background: #000; cursor: pointer; touch-action: none;
+}
+.hymns-proj .hymns-proj-blank-full {
+  position: absolute; inset: 0; z-index: 10000;
+  background: #000; cursor: pointer; touch-action: none;
+}
+.hymns-proj .hymns-proj-blank-content.is-hidden,
+.hymns-proj .hymns-proj-blank-full.is-hidden { display: none; }
+/* 控制条要浮在「只黑诗歌区」的遮罩之上，否则黑屏后没法再点按钮恢复 */
+.hymns-proj .hymns-proj-tools,
+.hymns-proj .hymns-proj-nav,
+.hymns-proj .hymns-proj-bar,
+.hymns-proj .hymns-proj-playbar { z-index: 5; }
+.hymns-proj button.hymns-proj-blank-btn.active {
+  color: #111; background: #ffe14a;
+}
+
 /* 加载 / 出错提示 */
 .hymns-proj .hymns-proj-tip {
   position: absolute; left: 50%; top: 50%;

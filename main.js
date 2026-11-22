@@ -165,6 +165,12 @@ const UPDATE_BASE = 'https://raw.githubusercontent.com/' + UPDATE_REPO + '/' + U
 
 // ==================== 更新日志内容（供弹窗离线展示；缺失时回退到远端 CHANGELOG.md）====================
 const CHANGELOG_CONTENT = {
+  '2.9.0': `## [2.9.0] - 2026-11-23
+
+### 本次更新
+- **诗歌投影黑屏**：⛶ 全屏按钮前新增黑屏按钮，短按或按 \`H\` 只黑诗歌显示区，长按 600ms 整屏黑；再按一次按钮 / \`H\` 可随时恢复，点黑屏区或做任意操作也会恢复（可在设置里关掉）。
+- **投影设置新增「黑屏」组**：可开关「无操作后自动黑屏」、选择自动黑屏范围（诗歌投影区 / 整屏）、设置等待时长（1–60 分钟），以及「任何操作自动解除黑屏」。`,
+
   '2.8.1': `## [2.8.1] - 2026-11-21
 
 ### 改进
@@ -2404,6 +2410,17 @@ function normalizeProjectionClockFontSize(value) {
   if (!Number.isFinite(n)) return 40;
   return Math.max(16, Math.min(96, n));
 }
+// ===== 投影黑屏：与 Bible 投影同一套规则 =====
+// 长按黑屏按钮 / H 键超过这个时长＝整屏黑屏，短按＝只黑诗歌区。
+const PROJECTION_BLANK_LONG_MS = 600;
+function normalizeProjAutoBlankMinutes(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.max(1, Math.min(120, Math.round(n))) : 5;
+}
+// content＝只黑诗歌显示区，full＝整屏（含工具条）。
+function normalizeProjAutoBlankMode(value) {
+  return value === 'full' || value === 'screen' || value === 'all' ? 'full' : 'content';
+}
 function parseNoticeDoc(text) {
   const src = typeof text === 'string' ? text : '';
   const state = { enabled: false, active: 0, activeTop: 0, activeBottom: 0 };
@@ -2492,6 +2509,11 @@ class HymnProjection {
     this._resizeTimer = null;
     this._fullscreen = false;
     this._exitFsByToggle = false;             // 仅 ⛶ 按钮主动「整屏↔窗口」切换时为 true；ESC 等原生退出不置位
+    // 黑屏：blankMode=null / 'content'（只黑诗歌区）/ 'full'（整屏），与 Bible 投影同语义
+    this.blankMode = null;
+    this.blankBtn = null;
+    this.blankContentEl = null;
+    this.blankFullEl = null;
     this._pos = { x: 0, y: 0 };
     this._playbarOpen = false;
     this._seeking = false;
@@ -2568,6 +2590,12 @@ class HymnProjection {
     this.el = el;
 
     this.stageEl = el.createDiv({ cls: 'hymns-proj-stage' });
+    // 黑屏遮罩：一份只盖诗歌显示区（工具条 / 翻节按钮 / 信息条仍可见），
+    // 一份盖住整个投影层。两者都挂在投影层内部，整屏时不会被 top layer 挡住。
+    // 舞台在 renderPage 里只追加 canvas，不会清空 stage，遮罩不会被冲掉。
+    this.blankContentEl = el.createDiv({ cls: 'hymns-proj-blank-content is-hidden' });
+    this.stageEl.appendChild(this.blankContentEl);
+    this.bindBlankCover(this.blankContentEl);
     // 通告区挂在投影层内部（整屏 top layer 会盖住 body 上的浮层）
     this.initNoticeDom();
     this.tipEl = el.createDiv({ cls: 'hymns-proj-tip', text: '正在打开投影…' });
@@ -2703,6 +2731,14 @@ class HymnProjection {
       e.stopPropagation();
       this.toggleProjectionPanel('playlist');
     });
+    // 黑屏按钮在 ⛶ 全屏按钮前面（移动端没有全屏按钮时它就在最右）。
+    // 短按＝黑诗歌区，长按 600ms＝整屏黑；再按一次或 H 键同样切换。
+    this.blankBtn = this.actionsEl.createEl('button', {
+      cls: 'hymns-proj-btn hymns-proj-blank-btn',
+      attr: { 'aria-label': '黑屏（短按＝诗歌区，长按＝整屏；H 键同）', title: '黑屏（短按＝诗歌区，长按＝整屏；H 键同）' }
+    });
+    try { setIcon(this.blankBtn, 'eye-off'); } catch (e) { this.blankBtn.textContent = '◼'; }
+    this.bindBlankButton();
     if (this.isDesktop) {
       this.fsBtn = this.actionsEl.createEl('button', { cls: 'hymns-proj-btn', attr: { 'aria-label': '全屏投影（O）', title: '全屏投影（O）' } });
       setIcon(this.fsBtn, 'maximize');
@@ -2729,7 +2765,7 @@ class HymnProjection {
     // 底部信息条：诗歌名 / 操作提示 / 页码
     this.barEl = el.createDiv({ cls: 'hymns-proj-bar' });
     this.titleEl = this.barEl.createSpan({ cls: 'hymns-proj-title', text: this.hymn ? hymnLabel(this.hymn) : '诗歌投影' });
-    const hint = '↑ ↓ 翻节 · ← 上一首 · → 下一首 · 左右拖/滑 换诗歌（右滑上一首 · 左滑下一首） · 上下拖/滑 翻节 · 滚轮 翻节 · Enter 搜索换诗歌 · 空格 播放' + (this.isDesktop ? ' · O 全屏' : '') + ' · P / Esc 退出';
+    const hint = '↑ ↓ 翻节 · ← 上一首 · → 下一首 · 左右拖/滑 换诗歌（右滑上一首 · 左滑下一首） · 上下拖/滑 翻节 · 滚轮 翻节 · Enter 搜索换诗歌 · 空格 播放 · H 黑屏（长按整屏）' + (this.isDesktop ? ' · O 全屏' : '') + ' · P / Esc 退出';
     this.barEl.createSpan({ cls: 'hymns-proj-hint', text: hint });
     this.pageEl = this.barEl.createSpan({ cls: 'hymns-proj-page', text: '' });
 
@@ -2743,6 +2779,9 @@ class HymnProjection {
     el.addEventListener('pointermove', () => this.wake());
     el.addEventListener('pointerdown', () => this.wake());
 
+    // 整屏黑屏遮罩放最后一层：盖住工具条、通告、面板与信息条；仍留在投影层内部。
+    this.blankFullEl = el.createDiv({ cls: 'hymns-proj-blank-full is-hidden' });
+    this.bindBlankCover(this.blankFullEl);
     d.body.appendChild(el);
     // 安卓状态栏兜底必须在挂载后调用（要读宿主的 computed 变量）
     applyHymnsSafeAreaFallback(el, '--hymns-android-inset-top');
@@ -2777,6 +2816,8 @@ class HymnProjection {
     this.updateChrome();
     this.syncPlayState();
     this.initNotice();
+    this.bindProjectionActivity();
+    this.restartAutoBlankTimer();
     try { el.focus({ preventScroll: true }); } catch (e) { /* ignore */ }
     if (this.hymn) {
       // 从「最近打开」回看投影：绝不 addRecent，否则这首被顶到第一行、后面没法接着翻
@@ -3480,7 +3521,9 @@ class HymnProjection {
     }, 550);
   }
   onKeyUp(e) {
-    if (!e || e.key !== 'Enter' || this._closed) return;
+    if (!e || this._closed) return;
+    if (e.key === 'h' || e.key === 'H') { this.finishBlankKeyPress(); return; }
+    if (e.key !== 'Enter') return;
     if (this._enterHoldTimer) {
       clearTimeout(this._enterHoldTimer);
       this._enterHoldTimer = null;
@@ -4290,6 +4333,17 @@ class HymnProjection {
         return;
       }
     }
+    // H：黑屏开关（短按＝诗歌区，长按＝整屏），与 Bible 投影一致。
+    // 打字时不抢；与按钮共用同一套按下/松开状态机。
+    if ((k === 'h' || k === 'H') && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+      const aeH = this.docEl && this.docEl.activeElement;
+      const tgtH = e && e.target;
+      if ((tgtH && tgtH.closest && tgtH.closest('input, textarea, select, [contenteditable="true"]')) ||
+          (aeH && aeH.closest && aeH.closest('input, textarea, select, [contenteditable="true"]'))) return;
+      e.preventDefault(); e.stopPropagation();
+      if (!e.repeat) this.startBlankKeyPress();
+      return;
+    }
     // Q/W/E 归 BSAR：已装已开时完全让行（由对方插件级监听切回经文投影）；
     // 未装 / 未开时给一次明确提示，免得用户以为按键失灵。输入框、笔记正文、
     // 输入法合成态与组合键一律放行，打字时绝不弹提示。
@@ -4436,6 +4490,129 @@ class HymnProjection {
     this.syncModeLabel();                     // 左上角模式名跟着「诗歌全屏 / 诗歌窗口」变
     this.renderPage(this.pageNo);
     this.wake();
+  }
+
+  /* ===== 黑屏：短按按钮 / H＝诗歌区，长按＝整屏（与 Bible 投影同规则） ===== */
+  syncBlankCover() {
+    // canvas 与空状态卡片都在 stage 里，重画不会移除遮罩；这里兜住外部重建 stage 的场景。
+    if (this.blankContentEl && this.stageEl && this.blankContentEl.parentNode !== this.stageEl) {
+      try { this.stageEl.appendChild(this.blankContentEl); } catch (e) { /* ignore */ }
+    }
+  }
+  setBlankScreen(mode) {
+    this.blankMode = (mode === 'content' || mode === 'full') ? mode : null;
+    if (this.blankContentEl) this.blankContentEl.classList.toggle('is-hidden', this.blankMode !== 'content');
+    if (this.blankFullEl) this.blankFullEl.classList.toggle('is-hidden', this.blankMode !== 'full');
+    if (this.blankBtn) this.blankBtn.classList.toggle('active', !!this.blankMode);
+    return this.blankMode;
+  }
+  clearBlankScreen() { return this.setBlankScreen(null); }
+  isBlankScreen() { return !!this.blankMode; }
+  bindBlankButton() {
+    const btn = this.blankBtn;
+    if (!btn || this._blankBtnBound) return;
+    this._blankBtnBound = true;
+    let timer = null, longFired = false;
+    const clear = () => { if (timer) { clearTimeout(timer); timer = null; } };
+    btn.addEventListener('pointerdown', (e) => {
+      if (e && e.stopPropagation) e.stopPropagation();
+      clear();
+      longFired = false;
+      timer = setTimeout(() => {
+        longFired = true;
+        if (!this._closed) this.setBlankScreen('full');
+      }, PROJECTION_BLANK_LONG_MS);
+    });
+    btn.addEventListener('pointerup', () => {
+      clear();
+      if (longFired) { longFired = false; return; }
+      if (this.blankMode) this.clearBlankScreen();
+      else this.setBlankScreen('content');
+    });
+    btn.addEventListener('pointercancel', () => { clear(); longFired = false; });
+    btn.addEventListener('pointerleave', () => { clear(); longFired = false; });
+  }
+  bindBlankCover(el) {
+    if (!el) return;
+    let timer = null, longFired = false, downX = 0, downY = 0;
+    const clear = () => { if (timer) { clearTimeout(timer); timer = null; } };
+    el.addEventListener('pointerdown', (e) => {
+      if (e && e.stopPropagation) e.stopPropagation();
+      clear();
+      longFired = false;
+      downX = Number(e && e.clientX) || 0;
+      downY = Number(e && e.clientY) || 0;
+      timer = setTimeout(() => { longFired = true; this.clearBlankScreen(); }, PROJECTION_BLANK_LONG_MS);
+    });
+    el.addEventListener('pointermove', (e) => {
+      const x = Number(e && e.clientX) || 0, y = Number(e && e.clientY) || 0;
+      if (Math.abs(x - downX) > 12 || Math.abs(y - downY) > 12) { clear(); longFired = false; }
+    });
+    el.addEventListener('pointerup', (e) => {
+      clear();
+      if (longFired) { longFired = false; return; }
+      const x = Number(e && e.clientX) || 0, y = Number(e && e.clientY) || 0;
+      if (Math.abs(x - downX) > 12 || Math.abs(y - downY) > 12) return;
+      const s = (this.plugin && this.plugin.settings) || {};
+      // 自动解除开着时点遮罩即可恢复；关掉时只认长按（或按钮 / H）。
+      if (s.projectionAutoUnblank !== false) this.clearBlankScreen();
+    });
+    el.addEventListener('pointercancel', () => { clear(); longFired = false; });
+  }
+  startBlankKeyPress() {
+    if (this._blankKeyTimer) clearTimeout(this._blankKeyTimer);
+    this._blankKeyActive = true;
+    this._blankKeyLongFired = false;
+    this._blankKeyTimer = setTimeout(() => {
+      this._blankKeyLongFired = true;
+      if (!this._closed) this.setBlankScreen('full');
+    }, PROJECTION_BLANK_LONG_MS);
+  }
+  finishBlankKeyPress() {
+    if (!this._blankKeyActive) return;
+    this._blankKeyActive = false;
+    if (this._blankKeyTimer) { clearTimeout(this._blankKeyTimer); this._blankKeyTimer = null; }
+    if (this._blankKeyLongFired) { this._blankKeyLongFired = false; return; }
+    if (this.blankMode) this.clearBlankScreen();
+    else this.setBlankScreen('content');
+  }
+  restartAutoBlankTimer() {
+    if (this._autoBlankTimer) { clearTimeout(this._autoBlankTimer); this._autoBlankTimer = null; }
+    const s = (this.plugin && this.plugin.settings) || {};
+    if (!s.projectionAutoBlank || this._closed) return;
+    const mins = normalizeProjAutoBlankMinutes(s.projectionAutoBlankMinutes);
+    this._autoBlankTimer = setTimeout(() => {
+      this._autoBlankTimer = null;
+      if (this._closed || this.blankMode) return;
+      this.setBlankScreen(normalizeProjAutoBlankMode(s.projectionAutoBlankMode));
+    }, mins * 60000);
+  }
+  notifyProjectionActivity(e) {
+    this.restartAutoBlankTimer();
+    if (!this.blankMode) return;
+    const s = (this.plugin && this.plugin.settings) || {};
+    if (s.projectionAutoUnblank === false) return;
+    const t = e && e.target;
+    if (t && t.closest && t.closest('.hymns-proj-blank-content, .hymns-proj-blank-full, .hymns-proj-blank-btn')) return;
+    this.clearBlankScreen();
+  }
+  bindProjectionActivity() {
+    if (this._projectionActivityBound || !this.docEl) return;
+    this._projectionActivityBound = true;
+    const self = this;
+    this._projectionActivity = (e) => {
+      if (self._closed) return;
+      if (e && e.type === 'keydown' && (e.key === 'h' || e.key === 'H')) return;
+      self.notifyProjectionActivity(e);
+    };
+    this._projectionActivityEvents = [
+      [this.docEl, 'pointerdown', this._projectionActivity, true],
+      [this.docEl, 'keydown', this._projectionActivity, true],
+      [this.docEl, 'wheel', this._projectionActivity, { capture: true, passive: true }]
+    ];
+    for (const [target, type, fn, opts] of this._projectionActivityEvents) {
+      try { target.addEventListener(type, fn, opts); } catch (e) { /* ignore */ }
+    }
   }
 
   /* ---- 播放：复用侧边栏的音频元素 ---- */
@@ -4954,10 +5131,23 @@ class HymnProjection {
         titleInput.className = 'hymns-proj-notice-item-title';
         titleInput.type = 'text';
         titleInput.value = String(it.title || '');
+        // 标题框里 Enter / Ctrl+Enter 都保存；正文里 Enter 保留换行，Ctrl+Enter 才保存。
+        titleInput.addEventListener('keydown', (e) => {
+            if (!e || e.key !== 'Enter') return;
+            if (e.preventDefault) e.preventDefault();
+            if (e.stopPropagation) e.stopPropagation();
+            self.saveNoticeEdit(i);
+        });
         const bodyInput = (this.docEl || document).createElement('textarea');
         bodyInput.className = 'hymns-proj-notice-item-body';
         bodyInput.value = String(it.body || '');
         bodyInput.rows = 5;
+        bodyInput.addEventListener('keydown', (e) => {
+            if (!e || e.key !== 'Enter' || !(e.ctrlKey || e.metaKey)) return;
+            if (e.preventDefault) e.preventDefault();
+            if (e.stopPropagation) e.stopPropagation();
+            self.saveNoticeEdit(i);
+        });
         const headRow = (this.docEl || document).createElement('div');
         headRow.className = 'hymns-proj-notice-edit-head';
         headRow.appendChild(titleInput);
@@ -4977,7 +5167,7 @@ class HymnProjection {
         form.appendChild(bodyInput);
         const hint = (this.docEl || document).createElement('div');
         hint.className = 'hymns-proj-notice-edit-hint';
-        hint.textContent = '正文按 Enter 换行';
+        hint.textContent = '正文按 Enter 换行，Ctrl+Enter 保存';
         form.appendChild(hint);
         list.appendChild(form);
         continue;
@@ -5198,6 +5388,69 @@ class HymnProjection {
       clockVal.textContent = n + ' px';
       applyClock('projectionClockFontSize', n);
     });
+
+    // 黑屏：按钮 / H 键的开关不在这里，这里只管「无操作后自动黑屏」及其范围、等待时长、
+    // 以及任何操作是否自动解除。字段名与 Bible 投影一致，两端各自存自己的 data.json。
+    const blankGroup = panel.createDiv({ cls: 'hymns-proj-settings-group' });
+    blankGroup.createDiv({ cls: 'hymns-proj-settings-group-title', text: '黑屏' });
+    const applyBlank = (key, value) => {
+      if (!self.plugin || !self.plugin.settings) return;
+      self.plugin.settings[key] = value;
+      self.restartAutoBlankTimer();
+      if (typeof self.plugin.saveAll === 'function') {
+        const r = self.plugin.saveAll();
+        if (r && typeof r.catch === 'function') r.catch(() => { /* 存不下不影响本次切换 */ });
+      }
+    };
+    const addBlankCheck = (key, label, checked) => {
+      const row = blankGroup.createDiv({ cls: 'hymns-proj-settings-row hymns-proj-settings-clickable' });
+      row.createSpan({ cls: 'hymns-proj-settings-row-label', text: label });
+      const ctrl = row.createDiv({ cls: 'hymns-proj-settings-ctrl' });
+      const cb = ctrl.createEl('input', { cls: 'hymns-proj-settings-check', attr: { type: 'checkbox', 'aria-label': label, title: label } });
+      cb.checked = !!checked;
+      row.addEventListener('click', (e) => {
+        if (e && e.stopPropagation) e.stopPropagation();
+        cb.checked = !cb.checked;
+        applyBlank(key, !!cb.checked);
+      });
+      return cb;
+    };
+    addBlankCheck('projectionAutoBlank', '无操作后自动黑屏', !!s.projectionAutoBlank);
+    const blankModeRow = blankGroup.createDiv({ cls: 'hymns-proj-settings-row' });
+    blankModeRow.createSpan({ cls: 'hymns-proj-settings-row-label', text: '自动黑屏范围' });
+    const blankModeCtrl = blankModeRow.createDiv({ cls: 'hymns-proj-settings-mode-ctrl' });
+    const blankModeBtns = {};
+    const blankModeNow = normalizeProjAutoBlankMode(s.projectionAutoBlankMode);
+    for (const [val, label] of [['content', '诗歌投影区'], ['full', '整屏']]) {
+      const btn = blankModeCtrl.createEl('button', {
+        cls: 'hymns-proj-settings-mode-btn' + (val === blankModeNow ? ' is-active' : ''),
+        text: label, attr: { type: 'button', title: '无操作自动黑屏时，只黑诗歌区还是整屏' }
+      });
+      btn.addEventListener('click', (e) => {
+        if (e && e.stopPropagation) e.stopPropagation();
+        for (const k of ['content', 'full']) {
+          if (blankModeBtns[k] && blankModeBtns[k].classList) blankModeBtns[k].classList.toggle('is-active', k === val);
+        }
+        applyBlank('projectionAutoBlankMode', val);
+      });
+      blankModeBtns[val] = btn;
+    }
+    const blankMinRow = blankGroup.createDiv({ cls: 'hymns-proj-settings-row' });
+    blankMinRow.createSpan({ cls: 'hymns-proj-settings-row-label', text: '自动黑屏等待' });
+    const blankMinCtrl = blankMinRow.createDiv({ cls: 'hymns-proj-settings-ctrl' });
+    const blankMinRange = blankMinCtrl.createEl('input', {
+      cls: 'hymns-proj-settings-range',
+      attr: { type: 'range', min: '1', max: '60', step: '1', title: '无操作多久后自动黑屏（1–60 分钟）', 'aria-label': '自动黑屏等待' }
+    });
+    const blankMinNow = normalizeProjAutoBlankMinutes(s.projectionAutoBlankMinutes);
+    blankMinRange.value = String(Math.min(60, blankMinNow));
+    const blankMinVal = blankMinCtrl.createSpan({ cls: 'hymns-proj-settings-value', text: blankMinNow + ' 分钟' });
+    blankMinRange.addEventListener('input', () => {
+      const n = normalizeProjAutoBlankMinutes(blankMinRange.value);
+      blankMinVal.textContent = n + ' 分钟';
+      applyBlank('projectionAutoBlankMinutes', n);
+    });
+    addBlankCheck('projectionAutoUnblank', '任何操作自动解除黑屏', s.projectionAutoUnblank !== false);
 
     const group = panel.createDiv({ cls: 'hymns-proj-settings-group' });
     group.createDiv({ cls: 'hymns-proj-settings-group-title', text: '投影通告' });
@@ -5690,6 +5943,20 @@ class HymnProjection {
     try { d.removeEventListener('keyup', this._onKeyUp, true); } catch (e) { /* ignore */ }
     try { d.removeEventListener('focusin', this._onFocusIn, true); } catch (e) { /* ignore */ }
     if (this._enterHoldTimer) { clearTimeout(this._enterHoldTimer); this._enterHoldTimer = null; }
+    // 黑屏：计时器与文档级活动监听逐条注销，别在关掉投影后还偷偷改设置画面
+    if (this._autoBlankTimer) { clearTimeout(this._autoBlankTimer); this._autoBlankTimer = null; }
+    if (this._blankKeyTimer) { clearTimeout(this._blankKeyTimer); this._blankKeyTimer = null; }
+    this._blankKeyActive = false;
+    this._blankKeyLongFired = false;
+    this.blankMode = null;
+    if (this._projectionActivityEvents) {
+      for (const [target, type, fn, opts] of this._projectionActivityEvents) {
+        try { target.removeEventListener(type, fn, opts); } catch (e) { /* ignore */ }
+      }
+      this._projectionActivityEvents = null;
+    }
+    this._projectionActivity = null;
+    this._projectionActivityBound = false;
     try { d.removeEventListener('fullscreenchange', this._onFsChange); } catch (e) { /* ignore */ }
     try { this.win.removeEventListener('resize', this._onResize); } catch (e) { /* ignore */ }
     clearTimeout(this._idleTimer);
@@ -8164,7 +8431,12 @@ class HymnsPlugin extends Plugin {
       // 顶栏时钟：与 Bible 投影同一套字段名与默认值
       projectionClockEnabled: true,
       projectionClockSeconds: false,
-      projectionClockFontSize: 40
+      projectionClockFontSize: 40,
+      // 投影黑屏：与 Bible 投影同字段名、同默认值，各自保存
+      projectionAutoBlank: false,
+      projectionAutoBlankMode: 'content',
+      projectionAutoBlankMinutes: 5,
+      projectionAutoUnblank: true
     }, data.settings || {});
     // 通告设置归一化（旧 data.json 里没有这些字段时给默认值）
     this.settings.noticeFolder = normalizeNoticeFolder(this.settings.noticeFolder);
@@ -8177,6 +8449,10 @@ class HymnsPlugin extends Plugin {
     this.settings.projectionClockFontSize = normalizeProjectionClockFontSize(this.settings.projectionClockFontSize);
     this.settings.projectionClockEnabled = this.settings.projectionClockEnabled !== false;
     this.settings.projectionClockSeconds = !!this.settings.projectionClockSeconds;
+    this.settings.projectionAutoBlank = !!this.settings.projectionAutoBlank;
+    this.settings.projectionAutoBlankMode = normalizeProjAutoBlankMode(this.settings.projectionAutoBlankMode);
+    this.settings.projectionAutoBlankMinutes = normalizeProjAutoBlankMinutes(this.settings.projectionAutoBlankMinutes);
+    this.settings.projectionAutoUnblank = this.settings.projectionAutoUnblank !== false;
     this.playlists = data.playlists || [];
     this.removedBuiltinIds = data.removedBuiltinIds || [];
     // 启动时也按当前上限裁剪一次：改小设置后遗留的旧记录不会一直挂着
